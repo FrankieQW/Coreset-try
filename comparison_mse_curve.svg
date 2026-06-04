@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="680" viewBox="0 0 1100 680">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="550.0" y="36" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#111827">Baseline vs Coreset MLP Action Prediction MSE</text>
+<line x1="95" y1="575.00" x2="1060" y2="575.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="83" y="579.00" text-anchor="end" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">0.000</text>
+<line x1="95" y1="473.60" x2="1060" y2="473.60" stroke="#e5e7eb" stroke-width="1"/>
+<text x="83" y="477.60" text-anchor="end" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">0.018</text>
+<line x1="95" y1="372.20" x2="1060" y2="372.20" stroke="#e5e7eb" stroke-width="1"/>
+<text x="83" y="376.20" text-anchor="end" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">0.037</text>
+<line x1="95" y1="270.80" x2="1060" y2="270.80" stroke="#e5e7eb" stroke-width="1"/>
+<text x="83" y="274.80" text-anchor="end" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">0.055</text>
+<line x1="95" y1="169.40" x2="1060" y2="169.40" stroke="#e5e7eb" stroke-width="1"/>
+<text x="83" y="173.40" text-anchor="end" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">0.074</text>
+<line x1="95" y1="68.00" x2="1060" y2="68.00" stroke="#e5e7eb" stroke-width="1"/>
+<text x="83" y="72.00" text-anchor="end" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">0.092</text>
+<line x1="95.00" y1="68" x2="95.00" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="95.00" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">1</text>
+<line x1="217.15" y1="68" x2="217.15" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="217.15" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">11</text>
+<line x1="339.30" y1="68" x2="339.30" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="339.30" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">21</text>
+<line x1="461.46" y1="68" x2="461.46" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="461.46" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">31</text>
+<line x1="571.39" y1="68" x2="571.39" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="571.39" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">40</text>
+<line x1="693.54" y1="68" x2="693.54" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="693.54" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">50</text>
+<line x1="815.70" y1="68" x2="815.70" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="815.70" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">60</text>
+<line x1="937.85" y1="68" x2="937.85" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="937.85" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">70</text>
+<line x1="1060.00" y1="68" x2="1060.00" y2="575" stroke="#f3f4f6" stroke-width="1"/>
+<text x="1060.00" y="603" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">80</text>
+<line x1="95" y1="575" x2="1060" y2="575" stroke="#111827" stroke-width="1.4"/>
+<line x1="95" y1="68" x2="95" y2="575" stroke="#111827" stroke-width="1.4"/>
+<text x="577.50" y="644" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#111827">Epoch</text>
+<text x="26" y="321.50" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#111827" transform="rotate(-90 26 321.50)">MSE</text>
+<rect x="570" y="76" width="490" height="52" rx="4" fill="#ffffff" stroke="#d1d5db"/>
+<path d="M95.00,159.99 L107.22,424.77 L119.43,460.57 L131.65,486.03 L143.86,500.55 L156.08,507.14 L168.29,512.81 L180.51,525.36 L192.72,530.34 L204.94,531.29 L217.15,534.12 L229.37,538.84 L241.58,542.41 L253.80,541.08 L266.01,539.64 L278.23,543.86 L290.44,548.34 L302.66,548.79 L314.87,550.91 L327.09,552.02 L339.30,551.35 L351.52,552.81 L363.73,551.17 L375.95,554.10 L388.16,554.56 L400.38,555.90 L412.59,557.47 L424.81,555.56 L437.03,556.76 L449.24,556.11 L461.46,558.32 L473.67,558.23 L485.89,559.22 L498.10,558.11 L510.32,558.75 L522.53,560.11 L534.75,559.22 L546.96,562.57 L559.18,561.84 L571.39,559.99 L583.61,560.37 L595.82,561.58 L608.04,560.56 L620.25,562.48 L632.47,562.80 L644.68,563.60 L656.90,562.97 L669.11,562.11 L681.33,562.95 L693.54,564.27 L705.76,563.49 L717.97,564.83 L730.19,564.35 L742.41,560.02 L754.62,561.09 L766.84,561.89 L779.05,564.64 L791.27,565.52 L803.48,563.76 L815.70,563.97 L827.91,565.20 L840.13,564.37 L852.34,566.14 L864.56,566.81 L876.77,567.02 L888.99,566.00 L901.20,564.12 L913.42,566.22 L925.63,566.93 L937.85,567.10 L950.06,567.12 L962.28,567.03 L974.49,566.25 L986.71,566.87 L998.92,566.48 L1011.14,567.23 L1023.35,567.00 L1035.57,567.83 L1047.78,568.12 L1060.00,567.03" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-dasharray="7 5" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M95.00,356.50 L107.22,352.54 L119.43,379.27 L131.65,389.91 L143.86,432.94 L156.08,395.77 L168.29,455.82 L180.51,431.19 L192.72,451.31 L204.94,440.41 L217.15,453.52 L229.37,443.30 L241.58,442.46 L253.80,465.86 L266.01,448.01 L278.23,434.17 L290.44,457.80 L302.66,453.24 L314.87,419.88 L327.09,459.91 L339.30,432.93 L351.52,456.73 L363.73,464.09 L375.95,465.09 L388.16,451.81 L400.38,466.85 L412.59,459.48 L424.81,441.54 L437.03,457.02 L449.24,467.38 L461.46,453.18 L473.67,462.82 L485.89,460.16 L498.10,482.13 L510.32,453.14 L522.53,441.42 L534.75,462.78 L546.96,462.28 L559.18,469.88 L571.39,467.70 L583.61,468.95 L595.82,483.61 L608.04,469.81 L620.25,463.82 L632.47,451.44 L644.68,454.90 L656.90,465.79 L669.11,449.16 L681.33,465.85 L693.54,467.24 L705.76,477.64 L717.97,463.96 L730.19,463.96 L742.41,446.30 L754.62,451.67 L766.84,461.76 L779.05,472.88 L791.27,472.83 L803.48,460.65 L815.70,455.57 L827.91,472.37 L840.13,462.77 L852.34,464.76 L864.56,479.81 L876.77,468.47 L888.99,461.77 L901.20,452.77 L913.42,456.47 L925.63,468.34 L937.85,463.51 L950.06,477.47 L962.28,467.13 L974.49,459.39 L986.71,474.87 L998.92,465.27 L1011.14,472.20 L1023.35,461.85 L1035.57,461.05 L1047.78,467.25 L1060.00,463.09" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="595.82" cy="483.61" r="4.5" fill="#2563eb"/>
+<line x1="584" y1="100" x2="618" y2="100" stroke="#2563eb" stroke-width="3"/>
+<line x1="584" y1="108" x2="618" y2="108" stroke="#2563eb" stroke-width="2.2" stroke-dasharray="7 5"/>
+<text x="628" y="105" font-family="Arial, sans-serif" font-size="13" fill="#111827">Random-10% Baseline val, train dashed</text>
+<path d="M95.00,114.09" fill="none" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 5" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M95.00,370.99" fill="none" stroke="#dc2626" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="95.00" cy="370.99" r="4.5" fill="#dc2626"/>
+<line x1="829" y1="100" x2="863" y2="100" stroke="#dc2626" stroke-width="3"/>
+<line x1="829" y1="108" x2="863" y2="108" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 5"/>
+<text x="873" y="105" font-family="Arial, sans-serif" font-size="13" fill="#111827">PD-Coreset-10% val, train dashed</text>
+</svg>

@@ -1,0 +1,3 @@
+label,path,epochs,best_val_mse,best_epoch,final_val_mse,arm,instruction,sample_fraction,coreset_fraction
+Random-10% Baseline,baseline\baseline_random10_resnet18\baseline_results.json,80,0.0166226364672184,42,0.020353851839900017,right,Transfer the cube to the target position.,0.1,
+PD-Coreset-10%,coreset\coreset_pd10_resnet18\coreset_results.json,1,0.03710618242621422,1,0.03710618242621422,right,Transfer the cube to the target position.,,0.1
