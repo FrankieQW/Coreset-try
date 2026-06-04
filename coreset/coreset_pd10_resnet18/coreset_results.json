@@ -1,0 +1,63 @@
+{
+  "config": {
+    "dataset_dir": "aloha_sim_transfer_cube_human",
+    "output_dir": "outputs\\coreset_pd10_resnet18",
+    "baseline_output_dir": null,
+    "camera_key": "observation.images.top",
+    "instruction": "Transfer the cube to the target position.",
+    "arm": "right",
+    "coreset_fraction": 0.1,
+    "seed": 42,
+    "batch_size": 64,
+    "epochs": 1,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "val_fraction": 0.2,
+    "pretrained": true,
+    "language_dim": 128,
+    "hidden_dim": 256,
+    "num_workers": 0,
+    "device": "auto",
+    "temporal_window": 3,
+    "action_weight": 0.35,
+    "state_weight": 0.25,
+    "vision_weight": 0.25,
+    "rarity_weight": 0.15,
+    "rarity_neighbors": 10
+  },
+  "dataset": {
+    "total_episodes": 50,
+    "total_frames": 20000,
+    "candidate_frame_count": 16000,
+    "validation_frame_count": 4000,
+    "coreset_frame_count": 2000,
+    "coreset_fraction_of_full_data": 0.1,
+    "target_arm": "right",
+    "target_action_dim": 7
+  },
+  "coreset": {
+    "method": "PD-Coreset",
+    "description": "Brain-inspired predictive-diversity coreset using action/state/vision change, feature rarity, and temporal suppression.",
+    "weights": {
+      "action_delta": 0.35,
+      "state_delta": 0.25,
+      "vision_delta": 0.25,
+      "rarity": 0.15
+    },
+    "temporal_window": 3,
+    "rarity_neighbors": 10,
+    "mean_selected_score": 0.07201199233531952
+  },
+  "metrics": {
+    "final_train_mse": 0.08383030393719673,
+    "final_val_mse": 0.03710618242621422,
+    "best_val_mse": 0.03710618242621422,
+    "history": [
+      {
+        "epoch": 1,
+        "train_mse": 0.08383030393719673,
+        "val_mse": 0.03710618242621422
+      }
+    ]
+  }
+}

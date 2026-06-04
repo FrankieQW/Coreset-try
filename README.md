@@ -63,6 +63,48 @@ outputs/baseline_random10_resnet18/
 
 报告中建议引用 `baseline_results.json` 里的 `metrics.best_val_mse` 或 `metrics.final_val_mse` 作为随机 10% baseline 的 MSE。
 
+## 运行脑启发核心集验证
+
+第二步使用独立脚本 `run_coreset.py`，不会改动或调用 baseline 代码。该脚本实现 `PD-Coreset`：根据动作变化、机械臂状态变化、视觉预测误差、全局特征稀缺性和时间抑制，从全量数据中筛选 10% 核心帧，再用结构相同的 MLP 重新训练并报告 MSE。
+
+```bash
+python run_coreset.py \
+  --dataset-dir aloha_sim_transfer_cube_human \
+  --output-dir outputs/coreset_pd10_resnet18 \
+  --arm right \
+  --coreset-fraction 0.10 \
+  --epochs 80 \
+  --batch-size 64 \
+  --instruction "Transfer the cube to the target position."
+```
+
+如果某个输出目录里已经有全量 `features_vision.npy`，也可以用 `--baseline-output-dir` 复用特征，避免重复提取。注意第一步随机 baseline 默认只保存 10% 样本特征，不能作为全量特征复用。
+
+核心集价值分数为：
+
+```text
+score = 0.35 * action_delta
+      + 0.25 * state_delta
+      + 0.25 * vision_delta
+      + 0.15 * feature_rarity
+```
+
+其中 `action_delta`、`state_delta` 和 `vision_delta` 对应预测编码中的变化/预测误差，`feature_rarity` 用于降低分布冗余，`--temporal-window` 用于抑制相邻帧连续入选。
+
+运行后结果保存在：
+
+```text
+outputs/coreset_pd10_resnet18/
+  features_vision.npy
+  targets_action.npy
+  full_rows.csv
+  coreset_indices.csv
+  mlp_action_regressor.pt
+  coreset_results.json
+```
+
+报告中建议引用 `coreset_results.json` 里的 `metrics.best_val_mse` 或 `metrics.final_val_mse`，并与随机 baseline 的 `baseline_results.json` 对比。
+
 ## 方法说明
 
 1. 按 episode 随机抽取 10% 轨迹。对当前 50 条 episode，即抽取 5 条。
@@ -76,7 +118,7 @@ outputs/baseline_random10_resnet18/
 安装 `pytest` 后可运行：
 
 ```bash
-python -m pytest tests/test_baseline_utils.py
+python -m pytest tests/test_baseline_utils.py tests/test_coreset_utils.py
 ```
 
 该测试只覆盖抽样、动作维度选择和语言特征构造，不需要安装 PyTorch。
