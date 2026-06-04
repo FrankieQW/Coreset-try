@@ -1,0 +1,5433 @@
+Beyond neural scaling laws:
+beating power law scaling via data pruning
+Ben Sorscher∗ ∗1 Robert Geirhos∗2 Shashank Shekhar3
+Surya Ganguli1,3§ Ari S. Morcos3§
+∗equal contribution
+1Department of Applied Physics, Stanford University
+2University of Tübingen
+3Meta AI (FAIR)
+§Joint senior authors
+Abstract
+Widely observed neural scaling laws, in which error falls off as a power of the
+training set size, model size, or both, have driven substantial performance im-
+provements in deep learning. However, these improvements through scaling alone
+require considerable costs in compute and energy. Here we focus on the scaling of
+error with dataset size and show how in theory we can break beyond power law
+scaling and potentially even reduce it to exponential scaling instead if we have
+access to a high-quality data pruning metric that ranks the order in which training
+examples should be discarded to achieve any pruned dataset size. We then test
+this improved scaling prediction with pruned dataset size empirically, and indeed
+observe better than power law scaling in practice on ResNets trained on CIFAR-10,
+SVHN, and ImageNet. Next, given the importance of ﬁnding high-quality pruning
+metrics, we perform the ﬁrst large-scale benchmarking study of ten different data
+pruning metrics on ImageNet. We ﬁnd most existing high performing metrics
+scale poorly to ImageNet, while the best are computationally intensive and require
+labels for every image. We therefore developed a new simple, cheap and scalable
+self-supervised pruning metric that demonstrates comparable performance to the
+best supervised metrics. Overall, our work suggests that the discovery of good
+data-pruning metrics may provide a viable path forward to substantially improved
+neural scaling laws, thereby reducing the resource costs of modern deep learning.
+1 Introduction
+Empirically observed neural scaling laws [1, 2, 3, 4, 5, 6, 7, 8] in many domains of machine learning,
+including vision, language, and speech, demonstrate that test error often falls off as a power law with
+either the amount of training data, model size, or compute. Such power law scaling has motivated
+signiﬁcant societal investments in data collection, compute, and associated energy consumption.
+However, power law scaling is extremely weak and unsustainable. For example, a drop in error
+∗work done during an internship at Meta AI (FAIR)
+36th Conference on Neural Information Processing Systems (NeurIPS 2022).
+arXiv:2206.14486v6  [cs.LG]  21 Apr 2023
+Pareto
+frontier
+Test error (%)
+Theory
+Simulation
+100%
+Frac. data kept
+77%
+60%
+46%
+36%
+28%
+22%
+17%
+13%
+10%
+Training examples per parameter (               )
+Keep easy
+examples
+Keep hard
+examples
+ResNet18 on CIFAR-10D Information gain per example
+Keep easy 
+examples
+Keep hard
+examples
+Perceptron in teacher-student setting
+Total examples
+Perceptron in teacher-student setting Test accuracy (%)
+Keep hard 
+examples
+when total 
+data is
+abundant Keep easy 
+examples
+when total 
+data is 
+scarce
+B
+CA
+F
+E
+Information (nats)
+Frac. data kept
+Frac. data kept
+acckeep hard- acckeep easy (%)acckeep hard- acckeep easy (%)
+Frac. data kept
+Frac. data kept
+Total examples per parameter (           ) Training examples per parameter (               )
+Training examples per parameter (               )
+Figure 1: Our analytic theory of data pruning predicts that power law scaling of test error with respect
+to dataset size can be beaten. A: Test error as a function of αprune = f αtot with θ = 0. We observe
+an excellent match between our analytic theory (solid curves) and numerical simulations (dots) of
+perceptron learning at parameters N=200 (here: N=200 constant throughout ﬁgure). The red curve
+indicates the Pareto optimal test error ε achievable from a tradeoff between αtot and f at ﬁxedαprune.
+B: We ﬁnd that when data is abundant (scarce) corresponding to large (small)αtot, the better pruning
+strategy is to keep the hard (easy) examples. C: Color indicates difference in test error in keeping
+hard versus easy examples, revealing the change in strategy in (B). D: We tested this prediction on a
+ResNet18 trained on CIFAR-10, ﬁnding remarkably the same shift in optimal pruning strategy under
+the EL2N metric. E: Test accuracy as a function of f and αprune. For every ﬁxedαprune, there is an
+optimal fopt (purple curve). F: I(αprune) for different f.
+from 3% to 2% might require an order of magnitude more data, compute, or energy. In language
+modeling with large transformers, a drop in cross entropy loss from about 3.4 to 2.8 nats2 requires 10
+times more training data (Fig. 1 in [2]). Also, for large vision transformers, an additional 2 billion
+pre-training data points (starting from 1 billion) leads to an accuracy gain on ImageNet of a few
+percentage points (Fig. 1 in [7]). Here we ask whether we might be able to do better. For example,
+can we achieve exponential scaling instead, with a good strategy for selecting training examples?
+Such vastly superior scaling would mean that we could go from 3% to 2% error by only adding a few
+carefully chosen training examples, rather than collecting 10× more random ones.
+Focusing on scaling of performance with training dataset size, we demonstrate that exponential
+scaling is possible, both in theory and practice. The key idea is that power law scaling of error
+with respect to data suggests that many training examples are highly redundant. Thus one should
+in principle be able to prune training datasets to much smaller sizes and train on the smaller pruned
+datasets without sacriﬁcing performance. Indeed some recent works [9, 10, 11] have demonstrated
+this possibility by suggesting various metrics to sort training examples in order of their difﬁculty or
+importance, ranging from easy or redundant examples to hard or important ones, and pruning datasets
+by retaining some fraction of the hardest examples. However, these works leave open fundamental
+theoretical and empirical questions: When and why is successful data pruning possible? What are
+good metrics and strategies for data pruning? Can such strategies beat power law scaling? Can they
+scale to ImageNet? Can we leverage large unlabeled datasets to successfully prune labeled datasets?
+We address these questions through both theory and experiment. Our main contributions are:
+1. Employing statistical mechanics, we develop a new analytic theory of data pruning in the
+student-teacher setting for perceptron learning, where examples are pruned based on their
+teacher margin, with large (small) margins corresponding to easy (hard) examples. Our
+theory quantitatively matches numerical experiments and reveals two striking predictions:
+2However, note that nats is on a logarithmic scale and and small improvements in nats can lead to large
+improvements in downstream tasks.
+2
+(a) The optimal pruning strategy changes depending on the amount of initial data; with
+abundant (scarce) initial data, one should retain only hard (easy) examples.
+(b) Exponential scaling is possible with respect to pruned dataset size provided one chooses
+an increasing Pareto optimal pruning fraction as a function of initial dataset size.
+2. We show that the two striking predictions derived from theory hold also in practice in much
+more general settings. Indeed we empirically demonstrate signatures of exponential scaling
+of error with respect to pruned dataset size for ResNets trained from scratch on SVHN,
+CIFAR-10 and ImageNet, and Vision Transformers ﬁne-tuned on CIFAR-10.
+3. Motivated by the importance of ﬁnding good quality metrics for data pruning, we perform a
+large scale benchmarking study of 10 different data pruning metrics at scale on ImageNet,
+ﬁnding that most perform poorly, with the exception of the most compute intensive metrics.
+4. We leveraged self-supervised learning (SSL) to developed a new, cheapunsupervised data
+pruning metric that does not require labels, unlike prior metrics. We show this unsupervised
+metric performs comparably to the best supervised pruning metrics that require labels and
+much more compute. This result opens the door to the exciting possibility of leveraging
+pre-trained foundation models to prune new datasets even before they are labeled.
+Overall these results shed theoretical and empirical insights into the nature of data in deep learning
+and our ability to prune it, and suggest our current practice of collecting extremely large datasets may
+be highly inefﬁcient. Our initial results in beating power law scaling motivate further studies and
+investments in not just inefﬁcently collecting large amounts of random data, but rather, intelligently
+collecting much smaller amounts of carefully selected data, potentially leading to the creation and
+dissemination of foundation datasets, in addition to foundation models [12].
+2 Background and related work
+Our work brings together 3 largely disparate strands of intellectual inquiry in machine learning: (1)
+explorations of different metrics for quantifying differences between individual training examples;
+(2) the empirical observation of neural scaling laws; and (3) the statistical mechanics of learning.
+2.1 Pruning metrics: not all training examples are created equal
+Several recent works have explored various metrics for quantifying individual differences between
+data points. To describe these metrics in a uniform manner, we will think of all of them as ordering
+data points by their difﬁculty, ranging from “easiest” to “hardest.” When these metrics have been
+used for data pruning, the hardest examples are retained, while the easiest ones are pruned away.
+EL2N scores. For example [10] trained small ensembles (of about 10) networks for a very short
+time (about 10 epochs) and computed for every training example the average L2 norm of the error
+vector (EL2N score). Data pruning by retaining only the hardest examples with largest error enabled
+training from scratch on only 50% and 75% of CIFAR-10 and CIFAR-100 respectively without any
+loss in ﬁnal test accuracy. However the performance of EL2N on ImageNet has not yet been explored.
+Forgetting scores and classiﬁcation margins. [9] noticed that over the entire course of training,
+some examples are learned early and never forgotten, while others can be learned and unlearned (i.e.
+forgotten) repeatedly. They developed a forgetting score which measures the degree of forgetting of
+each example. Intuitively examples with low (high) forgetting scores can be thought of as easy (hard)
+examples. [9] explored data pruning using these metrics, but not at ImageNet scale.
+Memorization and inﬂuence. [13] deﬁned a memorization score for each example, corresponding
+to how much the probability of predicting the correct label for the example increases when it is
+present in the training set relative to when it is absent (also see [ 14]); a large increase means the
+example must be memorized (i.e. the remaining training data do not sufﬁce to correctly learn this
+example). Additionally [ 13] also considered an inﬂuence score that quantiﬁes how much adding
+a particular example to the training set increases the probability of the correct class label of a test
+example. Intuitively, low memorization and inﬂuence scores correspond to easy examples that are
+redundant with the rest of the data, while high scores correspond to hard examples that must be
+3
+individually learned. [13] did not use these scores for data pruning as their computation is expensive.
+We note since memorization explicitly approximates the increase in test loss due to removing each
+individual example, it is likely to be a good pruning metric (though it does not consider interactions).
+Ensemble active learning. Active learning iterates between training a model and selecting new
+inputs to be labeled [15, 16, 17, 18, 19]. In contrast, we focus on data pruning: one-shot selection
+of a data subset sufﬁcient to train to high accuracy from scratch. A variety of coreset algorithms
+(e.g. [20]) have been proposed for this, but their computation is expensive, and so data-pruning has
+been less explored at scale on ImageNet. An early clustering approach [ 21] allowed training on
+90% of ImageNet without sacriﬁcing accuracy. Notably [11] reduced this to 80% by training a large
+ensemble of networks on ImageNet and using ensemble uncertainty to deﬁne the difﬁculty of each
+example, with low (high) uncertainty corresponding to easy (hard) examples. We will show how to
+achieve similar pruning performance without labels or the need to train a large ensemble.
+Diverse ensembles (DDD). [22] assigned a score to every ImageNet image, given by the number of
+models in a diverse ensemble (10 models) that misclassiﬁed the image. Intuitively, low (high) scores
+correspond to easy (hard) examples. The pruning performance of this metric remains unexplored.
+Summary. We note: (1) only one of these metrics has tested well for its efﬁcacy in data pruning
+at scale on ImageNet; (2) all of these metrics require label information; (3) there is no theory of
+when and why data pruning is possible for any of these metrics; and (4) none of these works suggest
+the possibility of exponential scaling. We thus go beyond this prior work by benchmarking the data
+pruning efﬁcacy of not only these metrics but also a new unsupervised metric we introduce that
+does not require label information, all at scale on ImageNet. We also develop an analytic theory for
+data-pruning for the margin metric that predicts not only the possibility of exponential scaling but
+also the novel ﬁnding that retaining easy instead of hard examples is better when data is scarce.
+2.2 Neural scaling laws and their potential inefﬁciency
+Recent work [1, 2, 3, 4, 5, 6, 7, 8] has demonstrated that test lossL often falls off as a power law
+with different resources like model parameters (N), number of training examples (P ), and amount
+of compute ( C). However, the exponents ν of these power laws are often close to 0, suggesting
+potentially inefﬁcient use of resources. For example, for large models with lots of compute, so
+that the amount of training data constitutes a performance bottleneck, the loss scales asL≈ P−ν.
+Speciﬁcally for a large transformer based language model, ν = 0 .095, which implies an order
+of magnitude increase in training data drops cross-entropy loss by only about 0.6 nats (Fig. 1 in
+[2]). In neural machine translation experiments ν varies across language pairs from 0.35 to 0.48
+(Table 1 in [5]). Interestingly, [ 8] explored a ﬁxed computation budget C and optimized jointly
+over model size N and training set size P , revealing that scaling both N and P commensurately as
+C increases is compute optimal, and can yield smaller high performing models (trained on more
+data) than previous work. Nevertheless, for a transformer based language model, a 100× increase in
+compute, corresponding to 10× increases in both model size and training set size, leads to a drop in
+cross-entropy loss of only about 0.5 nats (Fig. 2 in [8]). Similar slow scaling holds for large vision
+transformers where adding 2 billion pre-training images reduces ImageNet performance by a few
+percentage points (Fig. 1 in [7]). While all of these results constitute signiﬁcant improvements in
+performance, they do come at a substantial resource cost whose fundamental origin arises from power
+law scaling with small exponents. Recent theoretical works [23, 24, 25] have argued that the power
+law exponent is governed by the dimension of a data manifold from which training examples are
+uniformly drawn. Here we explore whether we can beat power law scaling through careful data
+selection.
+2.3 Statistical mechanics of perceptron learning
+Statistical mechanics has long played a role in analyzing machine learning problems (see e.g.
+[26, 27, 28, 29] for reviews). One of the most fundamental applications is perceptron learning in
+the student-teacher setting [30, 31], in which random i.i.d. Gaussian inputs are labeled by a teacher
+perceptron to construct a training set. The test error for another student perceptron learning from this
+training set then scales as a power law with exponent−1 for such data. Such perceptrons have also
+been analyzed in an active learning setting where the learner is free to design any new input to be
+4
+labeled [32, 33], rather than choose from a ﬁxed set of inputs, as in data-pruning. Recent work [34]
+has analyzed this scenario but focused on message passing algorithms that are tailored to the case of
+Gaussian inputs and perceptrons, and are hard to generalize to real world settings. In contrast we
+analyze margin based pruning algorithms that are used in practice in diverse settings, as in [9, 10].
+3 An analytic theory of data pruning
+To better understand data pruning, we employed the replica method from statistical mechanics [35] to
+develop an analytic theory of pruning for the perceptron in the student-teacher setting [26] (see App. A
+for detailed derivations of all results). Consider a training dataset of P examples{xµ, yµ}µ=1,...,P
+where xµ∈ RN are i.i.d. zero mean unit variance random Gaussian inputs and yµ = sign(T· xµ)
+are labels generated by a teacher perceptron with weight vector T∈ RN . We work in the high
+dimensional statistics limit where N, P→∞ but the ratio αtot = P
+N of the number of total training
+examples to parameters remains O(1). We then consider a pruning algorithm used in [9, 10], namely:
+(1) train a probe student perceptron for very few epochs on the training data, obtaining weights Jprobe;
+(2) compute the margin mµ = Jprobe· (yµxµ) of each training example, where large (small) margins
+correspond to easy (hard) examples; (3) construct a pruned dataset of size Pprune = f P, where f is
+the fraction of examples kept, by retaining the Pprune hardest examples, (4) train a new perceptron to
+completion on the smaller dataset with a smaller ratio αprune = Pprune
+N of examples to parameters.
+We are interested in the test error ε of this ﬁnal perceptron as a function of αtot, f, and the angle
+θ between the probe student Jprobe and the teacher T. Our theory approximates Jprobe as simply a
+random Gaussian vector conditioned to have angle θ with the teacher T. Under this approximation
+we obtain an analytic theory for ε(αtot, f, θ) that is asymptotically exact in the high dimensional limit
+(App. A). We ﬁrst examine results whenθ = 0, so we are pruning training examples according to
+their veridical margins with respect to the teacher (Fig. 1A). We ﬁnd two striking phenomena, each
+of which constitute predictions in real-world settings that we will successfully conﬁrm empirically.
+The best pruning strategy depends on the amount of initial data. First, we note the test error
+curve for f = 1 in Fig. 1A corresponding to no pruning, or equivalently to randomly pruning a
+larger dataset of size αtot down to a size αprune, exhibits the well known classical perceptron learning
+power law scaling ε∝ α−1
+prune. Interestingly though, for small αtot, keeping the hardest examples
+performs worse than random pruning (lighter curves above darkest curve for small αprune in Fig. 1A).
+However, for large αtot, keeping the hardest examples performs substantially better than random
+pruning (lighter curves below darkest curve for large αprune in Fig. 1A). It turns out keeping the
+easiest rather than hardest examples is a better pruning strategy when αtot is small (Fig. 1C). If one
+does not have much data to start with, it is better to keep the easiest examples with largest margins
+(i.e. the blue regions of Fig. 1B) to avoid overﬁtting. The easiest examples provide coarse-grained
+information about the target function, while the hard examples provide ﬁne-grained information
+about the target function which can prevent the model from learning if one starts with lots of data.
+In cases where overﬁtting is less of an issue, it is best to keep the hardest examples with smallest
+margin that provide more information about the teacher’s decision boundary (i.e. the green region of
+Fig. 1B). Intuitively, in the limited data regime, it is challenging to model outliers since the basics are
+not adequately captured; hence, it is more important to keep easy examples so that the model can get
+to moderate error. However, with a larger dataset, the easy examples can be learned without difﬁculty,
+making modeling outliers the fundamental challenge.
+Fig. 1C reveals which pruning strategy is best as a joint function of αtot and f. Note the transition
+between optimal strategies becomes sharper at small fractions f of data kept. This transition between
+optimal pruning strategies can be viewed as a prediction in more general settings. To test this
+prediction we trained a ResNet18 on pruned subsets of the CIFAR-10 dataset (Fig. 1D), and observed
+strikingly similar behavior, indicating the prediction can hold far more generally, beyond perceptron
+learning. Interestingly, [9, 10] missed this transition, likely because they started pruning from large
+datasets.
+Pareto optimal data pruning can beat power law scaling. A second prediction of our theory is
+that when keeping a ﬁxed fraction f of the hardest examples as αtot increases (i.e. constant color
+curves in Fig. 1A), the error initially drops exponentially in αprune = f αtot, but then settles into
+the universal power law ε∝ α−1
+prune for all ﬁxed f. Thus there is no asymptotic advantage to data
+5
+A B C D
+Theory
+Simulation
+Theory
+Simulation
+20%
+Frac. data
+kept
+30%
+40%
+50%
+60%
+70%
+80%
+90%
+100%
+Training examples per parameter
+ (               )
+Training examples per parameter
+ (               )
+Training examples per parameter
+ (               )
+Error
+Figure 2: Data pruning with an imperfect metric. A: Weight vectors and decision boundaries for a
+teacher (black) and probe student (red) separated by angle θ. The black point has margin 0 (κ) w.r.t.
+the probe (teacher). B–D: Test error as a function of αprune for different f and different θ.
+pruning at a ﬁxedf. However, by pruning more aggressively (smallerf) when given more initial data
+(larger αtot), one can achieve a Pareto optimal test error as a function of pruned dataset sizeαprune that
+remarkably traces out at least an exponential scaling law (Fig. 1A, purple curve). Indeed our theory
+predicts for each αprune a Pareto optimal point in αtot and f (subject to αprune = f αtot), yielding for
+every ﬁxedαprune an optimal fopt, plotted in Fig. 1E. Note fopt decreases with αprune indicating more
+aggressive pruning (smaller fopt) of original datasets of larger size αtot is required to obtain larger
+Pareto optimal pruned datasets of size αprune. We will test this striking scaling prediction in Fig. 3.
+Beating power law scaling: an information-theoretic perspective. Classical randomly selected
+data generates slow power law error scaling because each extra training example provides less new
+information about the correct decision boundary than the previous example. More formally, letS(αtot)
+denote the typical entropy of the posterior distribution over student perceptron weights consistent
+with a training set of size αtot. The information gain I(αtot) due to additional examples beyond αtot
+can be deﬁned as the rate at which the posterior entropy is reduced: I(αtot) =− d
+dαtot
+S(αtot). In
+classical perceptron learning I(αtot) decays to zero as a power law in αtot, reﬂecting a vanishing
+amount of information per each new example, leading to the slow power law decay of test error
+ε∝ α−1
+tot . However, data pruning can increase the information gained per example by pruning away
+the uninformative examples. To show this, we generalized the replica calculation of the posterior
+entropy S and information gain I from random datasets of size αtot to pruned datasets of size αprune
+(App. A). We plot the resulting information gain I(αprune) for different f in Fig. 1F. For any ﬁxed
+f, I(αprune) will eventually decay as a power law as α−1
+prune. However, by more aggressively pruning
+(smaller f) datasets of larger size αtot, I(αprune) can converge to a ﬁnite valueI(∞) = 1 nat/example,
+resulting in larger pruned datasets only adding useful non-redundant information. Since each new
+example under Pareto optimal data pruning conveys ﬁnite information about the target decision
+boundary, as seen in Fig. 1F, the test error can decay at least exponentially in pruned dataset size
+as in Fig. 1A. Classical results [31] have shown that training examples chosen by maximizing the
+disagreement of a committee of student perceptrons can provide an asymptotically ﬁnite information
+rate, leading to exponential decay in test error. Intriguingly, the Pareto-optimal data pruning strategy
+we study in this work leads to faster than exponential decay, because it includes (partial) information
+about the target function provided by the probe student (Fig. 11).
+An imperfect pruning metric yields a cross over from exponential to power law scaling. We
+next examine the case of nonzero angle θ between the probe student Jprobe and the teacher T, such
+that the ranking of training examples by margin is no longer completely accurate (Fig. 2A). Retaining
+the hard examples with smallest margin with respect to the probe student will always result in pruned
+datasets lying near the probe’s decision boundary. But if θ is large, such examples might be far from
+the teacher’s decision boundary, and therefore could be less informative about the teacher (Fig. 2A).
+As a result our theory, conﬁrmed by simulations, predicts that under nonzero angles θ, the Pareto
+optimal lower envelope of test error over both αtot and f initially scales exponentially as a function
+of αprune = f αtot but then crosses over to a power law (Fig. 2BCD). Indeed, at any given nonzeroθ,
+our theory reveals that as αtot (and therefore αprune) becomes large, one cannot decrease test error any
+further by retaining less than a minimum fraction fmin(θ) of all available data. For example when
+θ = 10◦ (θ = 20◦) one can do no better asymptotically than pruning down to 24% (46%) of the total
+6
+Pareto
+frontier
+ResNet18 on SVHN
+Training examples Training examples
+Pareto
+frontier
+Test error (top-5 %)
+Test error (%)
+Test error  (%)
+Perceptron in teacher-student settingA B C D
+Pareto
+frontier
+ResNet18 on CIFAR-10 ResNet50 on ImageNet
+Theory
+Simulation
+Pareto
+frontier
+20%
+Frac. data kept
+30%
+40%
+50%
+60%
+70%
+80%
+90%
+100%
+20%
+Frac. data kept
+30%
+40%
+50%
+60%
+70%
+80%
+90%
+100%
+20%
+Frac. data kept
+30%
+40%
+50%
+60%
+70%
+80%
+90%
+100%
+1%
+Frac. data kept
+2%
+3%
+5%
+8%
+13%
+22%
+36%
+60%
+100%
+Training examplesTraining examples per parameter
+ (              )
+Figure 3: Beating power law scaling in practice. A–D: Curves of test error against pruned dataset
+size in 4 settings. Pruning scores were EL2N [10] for CIFAR-10 and SVHN and memorization [13]
+for ImageNet. See App. B for all pruning/training details and App. D for similar ImageNet plots
+with EL2N. Note solid curves reﬂect performance with a ﬁxed total dataset size; if we prune more
+aggressively with even larger datasets, scaling could improve further (e.g., dashed lines inA). Error
+curves with no data pruning (f = 1) are labeled with their best-ﬁt power law scaling∼ α−ν. (Note
+that for SVHN in B an asymptotic constant error E(P→∞ ) = 1.1% is subtracted from each of the
+curves to visualize the power law scaling more clearly.)
+Test error on CIFAR-10
+Fine-tuning examples
+Pareto
+frontier
+A B
+Frac. of ImageNet used for pretraining
+ResNet50 /f_inetuned on CIFAR-10
+Test accuracy (%)
+0.751.0 0.5 0.25 0
+Figure 4: Data pruning improves transfer
+learning. A: CIFAR-10 performance of
+a ViT pre-trained on all of ImageNet21K
+and ﬁne-tuned on different pruned subsets
+of CIFAR-10 under the EL2N metric. B:
+CIFAR-10 performance of ResNet50s pre-
+trained on different pruned subsets of Ima-
+geNet1K and ﬁne-tuned on all of CIFAR-
+10.
+data (Fig. 2CD). As θ approaches 0, fmin(θ) approaches 0, indicating that one can prune extremely
+aggressively to arbitrarily small f while still improving performance, leading to at least exponential
+scaling for arbitrarily large αprune in Fig. 2B. However, for nonzero θ, the lack of improvement
+for f < f min(θ) at large αprune renders aggressive pruning ineffective. This result highlights the
+importance of ﬁnding high quality pruning metrics withθ≈ 0. Such metrics can delay the cross over
+from exponential to power law scaling as pruned dataset size αprune increases, by making aggressive
+pruning with very small f highly effective. Strikingly, in App. Fig. 10 we demonstrate this cross-over
+in a real-world setting by showing that the test error on SVHN is bounded below by a power law
+when the dataset is pruned by a probe ResNet18 under the EL2N metric, trained for 4 epochs (weak
+pruning metric) but not a probe ResNet18 trained for 40 epochs (strong pruning metric).
+4 Data pruning can beat power law scaling in practice
+Our theory of data pruning for the perceptron makes three striking predictions which can be tested in
+more general settings, such as deep neural networks trained on benchmark datasets: (1) relative to
+random data pruning, keeping only the hardest examples should help when the initial dataset size
+is large, but hurt when it is small; (2) data pruning by retaining a ﬁxed fraction f of the hardest
+examples should yield power law scaling, with exponent equal to that of random pruning, as the
+initial dataset size increases; (3) the test error optimized over both initial data set size and fraction
+of data kept can trace out a Pareto optimal lower envelope that beats power law scaling of test error
+as a function of pruned dataset size, through more aggressive pruning at larger initial dataset size.
+We veriﬁed all three of these predictions on ResNets trained on SVHN, CIFAR-10, and ImageNet
+using varying amounts of initial dataset size and fractions of data kept under data pruning (compare
+theory in Fig. 3A with deep learning experiments in Fig. 3BCD). In each experimental setting we see
+better than power law scaling at larger initial data set sizes and more aggressive pruning. Moreover
+we would likely see even better scaling with even larger initial datasets (as in Fig.3A dashed lines).
+7
+Data pruning improves transfer learning. Modern foundation models are pre-trained on a large
+initial dataset, and then transferred to other downstream tasks by ﬁne-tuning on them. We therefore
+examined whether data-pruning can be effective for both reducing the amount of ﬁne-tuning data and
+the amount of pre-training data. To this end, we ﬁrst analyzed a vision transformer (ViT) pre-trained on
+ImageNet21K and then ﬁne-tuned on different pruned subsets of CIFAR-10. Interestingly, pre-trained
+models allow for far more aggressive data pruning; ﬁne-tuning on only 10% of CIFAR-10 can match
+or exceed performance obtained by ﬁne tuning onall of CIFAR-10 (Fig. 4A). Furthermore Fig. 4A
+provides a new example of beating power law scaling in the setting of ﬁne-tuning. Additionally, we
+examined the efﬁcacy of pruning pre-training data by pre-training ResNet50s on different pruned
+subsets of ImageNet1K (exactly as in Fig. 3D) and then ﬁne-tuning them on all of CIFAR-10.
+Fig. 4B demonstrates pre-training on as little as 50% of ImageNet can match or exceed CIFAR-10
+performance obtained by pre-training on all of ImageNet. Thus intriguingly pruning pre-training data
+on an upstream task can still maintain high performance on a different downstream task. Overall
+these results demonstrate the promise of data pruning in transfer learning for both the pre-training
+and ﬁne-tuning phases.
+A B
+C
+Top-5 accuracy (%)
+Frac. data kept
+Frac. data kept
+self-supervised prototypes
+in/f_luencesum-abs supervis
+ed
+prototypes
+1.0             0.95              0.9             0.85            0.8             0.75             0.7             0.65            0.6
+1.0              0.95              0.9              0.85              0.8              0.75              0.7              0.65              0.6
+Figure 5: Dataset pruning at ImageNet scale. A: Spearman’s rank correlation between all pairs of
+ImageNet metric scores, along with hierarchical clustering (as provided by seaborn.clustermap).
+B: Benchmarking existing supervised metrics on ImageNet (top-5 validation accuracy). C: Compar-
+ing top-5 performance on ImageNet when pruning according to the best existing supervised metric
+(memorization) and our supervised and self-supervised prototype metrics. In all 3 cases, training on
+80% of ImageNet approximates training on 100%. See App. B for pruning and training details.
+5 Benchmarking supervised pruning metrics on ImageNet
+We note that the majority of data pruning experiments have been performed on small-scale datasets
+(i.e. variants of MNIST and CIFAR), while the few pruning metrics proposed for ImageNet have
+rarely been compared against baselines designed on smaller datasets. Therefore, it is currently unclear
+how most pruning methods scale to ImageNet and which method is best. Motivated by how strongly
+the quality of a pruning metric can impact performance in theory (Fig. 2), we decided to ﬁll this
+knowledge gap by performing a systematic evaluation of 8 different supervised pruning metrics on
+ImageNet: two variants of inﬂuence scores [ 13], two variants of EL2N [10], DDD [22], memorization
+[13], ensemble active learning [11], and forgetting [9]. See Section 2 for a review of these metrics.
+Additionally, we include two new prototypicality metrics that we introduce in the next section.
+We ﬁrst asked how consistent the rankings induced by different metrics are by computing the
+Spearman rank correlation between each pair of metrics (Fig. 5A). Interestingly, we found substantial
+diversity across metrics, though some (EL2N, DDD, and memorization) were fairly similar with rank
+correlations above 0.7. However, we observed marked performance differences between metrics:
+Fig 5BC shows test performance when a fraction f of the hardest examples under each metric are
+kept in the training set. Despite the success of many of these metrics on smaller datasets, only a
+8
+few still match performance obtained by training on the full dataset, when selecting a signiﬁcantly
+smaller training subset (i.e. about 80% of ImageNet). Nonetheless, most metrics continue to beat
+random pruning, with memorization in particular demonstrating strong performance (Fig. 5C). We
+note that data pruning on ImageNet may be more difﬁcult than data pruning on other datasets, because
+ImageNet is already carefully curated to ﬁlter out uninformative examples.
+We found that all pruning metrics amplify class imbalance, which results in degraded performance.
+To solve this we used a simple 50% class balancing ratio for all ImageNet experiments. Further
+details and baselines without class balancing are shown in App. H. Metric scores, including baselines,
+are available from https://github.com/rgeirhos/dataset-pruning-metrics.
+6 Self-supervised data pruning through a prototypicality metric
+Fig. 5 shows many data pruning metrics do not scale well to ImageNet, while the few that do require
+substantial amounts of compute. Furthermore, all these metrics require labels, thereby limiting their
+ability to prune data for large-scale foundation models trained on massive unlabeled datasets [12].
+Thus there is a clear need for simple, scalable, self-supervised pruning metrics.
+To compute a self-supervised pruning metric for ImageNet, we perform k-means clustering in the
+embedding space of an ImageNet pre-trained self-supervised model (here: SWaV [36]), and deﬁne
+the difﬁculty of each data point by the cosine distance to its nearest cluster centroid, or prototype.
+Thus easy (hard) examples are the most (least) prototypical. Encouragingly, in Fig. 5C, we ﬁnd
+our self-supervised prototype metric matches or exceeds the performance of the best supervised
+metric, memorization, until only 70–80% of the data is kept, despite the fact that our metric does not
+use labels and is much simpler and cheaper to compute than many previously proposed supervised
+metrics. See App. Fig. 9 for further scaling experiments using the self-supervised metric.
+To assess whether the clusters found by our metric align with ImageNet classes, we compared their
+overlaps in Fig. 6A. Interestingly, we found alignment for some but not all classes. For example, class
+categories such as snakes were largely aligned to a small number of unsupervised clusters, while
+other classes were dispersed across many such clusters. If class information is available, we can
+enforce alignment between clusters and classes by simply computing a single prototype for each
+class (by averaging the embeddings of all examples of this class). While originally intended to be an
+additional baseline metric (called supervised prototypes, light blue in Fig 5C), this metric remarkably
+outperforms other supervised metrics and largely matches the performance of memorization, which
+is prohibitively expensive to compute. Moreover, the performance of the best self-supervised and
+supervised metrics are similar, demonstrating the promise of self-supervised pruning.
+One important choice for the self-supervised prototype metric is the number of clusters k. We found,
+reassuringly, our results were robust to this choice: k can deviate one order of magnitude more or
+less than the true number of classes (i.e. 1000 for ImageNet) without affecting performance (App. F).
+To better understand example difﬁculty under various metrics, we visualize extremal images for our
+self-supervised prototype metric and the memorization metric for one class (Fig 6B,C). Qualitatively,
+easy examples correspond to highly similar, redundant images, while hard examples look like
+idiosyncratic outliers. See App. E, Figs. 12,13,14,15,16,17,18,19 for more classes and metrics.
+Snakes InsectsDogs Primates Vehicles Food
+ImageNet class (sorted by wordnet hierarchy)
+SSL cluster (sorted hierarchically)
+A B C
+self-supervised prototypes memorization
+Figure 6: A: Heat map where each row denotes the probability that images in a given cluster come
+from each ImageNet class. B: The four easiest and hardest images under our self-supervised pruning
+metric and the best previously published supervised metric (memorization, shown inC) for ImageNet
+class 100 (black swan ).
+9
+7 Discussion
+Summary. We have shown, both in theory and practice, how to break beyond slow power law
+scaling of error versus dataset size to faster exponential scaling, through data pruning. Additionally we
+have developed a simple self-supervised pruning metric that enables us to discard 20% of ImageNet
+without sacriﬁcing performance, on par with the best and most compute intensive supervised metric.
+Limitations. The most notable limitation is that achieving exponential scaling requires a high
+quality data pruning metric. Since most metrics developed for smaller datasets scale poorly to
+ImageNet, our results emphasize the importance of future work in identifying high quality, scalable
+metrics. Our self-supervised metric provides a strong initial baseline. Moreover, a key advantage of
+data pruning is reduced computational cost due to training on a smaller dataset for the same number
+of epochs as the full dataset (see App. C). However, we found that performance often increased when
+training on the pruned dataset for the same number of iterations as on the full dataset, resulting in
+the same training time, but additional training epochs. However, this performance gain saturated
+before training time on the pruned dataset approached that on the whole dataset (App. J) thereby still
+yielding a computational efﬁciency gain. Overall this tradeoff between accuracy and training time on
+pruned data is important to consider in evaluating potential gains due to data pruning. Finally, we
+found that class-balancing was essential to maintain performance on data subsets (App. H). Future
+work will be required to identify ways to effectively select the appropriate amount of class-balancing.
+Ethical considerations. A potential negative societal impact could be that data-pruning leads to
+unfair outcomes for certain groups. We have done a preliminary analysis of how data-pruning affects
+performance on individual ImageNet classes (App. I), ﬁnding no substantial differential effects across
+classes. However proper fairness tests speciﬁc to deployment settings should always be conducted on
+every model, whether trained on pruned data or not. Additionally, we analyzed the impact of pruning
+on OOD performance (App. K).
+Outlook: Towards foundation datasets. We believe the most promising future direction is the
+further development of scalable, unsupervised data pruning metrics. Indeed our theory predicts that
+the application of pruning metrics on larger scale datasets should yield larger gains by allowing more
+aggressive pruning. This makes data pruning especially exciting for use on the massive unlabeled
+datasets used to train large foundation models (e.g. 400M image-text pairs for CLIP [ 37], 3.5B
+Instagram images [ 38], 650M images for the DALLE-2 encoder [ 39], 780B tokens for PALM
+[40]). If highly pruned versions of these datasets can be used to train a large number of different
+models, one can conceive of such carefully chosen data subsets as foundation datasets in which
+the initial computational cost of data pruning can be amortized across efﬁciency gains in training
+many downstream models, just at the initial computational cost of training foundation models is
+amortized across the efﬁciency gains of ﬁne-tuning across many downstream tasks. Together, our
+results demonstrate the promise and potential of data pruning for large-scale training and pretraining.
+Acknowledgments
+We thank Priya Goyal, Berﬁn Simsek, Pascal Vincent valuable discussions, Qing Jin for insights
+about the optimal pruning distribution, Isaac Seessel for VISSL support as well as Kashyap Chitta
+and José Álvarez for kindly providing their ensemble active learning score.
+References
+[1] Joel Hestness, Sharan Narang, Newsha Ardalani, Gregory Diamos, Heewoo Jun, Hassan
+Kianinejad, Md Patwary, Mostofa Ali, Yang Yang, and Yanqi Zhou. Deep learning scaling is
+predictable, empirically. arXiv preprint arXiv:1712.00409, 2017.
+[2] Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Benjamin Chess, Rewon Child,
+Scott Gray, Alec Radford, Jeffrey Wu, and Dario Amodei. Scaling laws for neural language
+models. arXiv preprint arXiv:2001.08361, 2020.
+[3] Tom Henighan, Jared Kaplan, Mor Katz, Mark Chen, Christopher Hesse, Jacob Jackson,
+Heewoo Jun, Tom B Brown, Prafulla Dhariwal, Scott Gray, et al. Scaling laws for autoregressive
+generative modeling. arXiv preprint arXiv:2010.14701, 2020.
+10
+[4] Jonathan S. Rosenfeld, Amir Rosenfeld, Yonatan Belinkov, and Nir Shavit. A constructive
+prediction of the generalization error across scales. International Conference on Learning
+Representations, 2020.
+[5] Mitchell A Gordon, Kevin Duh, and Jared Kaplan. Data and parameter scaling laws for
+neural machine translation. In Proceedings of the 2021 Conference on Empirical Methods in
+Natural Language Processing, pages 5915–5922, Online and Punta Cana, Dominican Republic,
+November 2021. Association for Computational Linguistics.
+[6] Danny Hernandez, Jared Kaplan, Tom Henighan, and Sam McCandlish. Scaling laws for
+transfer. arXiv preprint arXiv:2102.01293, 2021.
+[7] Xiaohua Zhai, Alexander Kolesnikov, Neil Houlsby, and Lucas Beyer. Scaling vision transform-
+ers. arXiv preprint arXiv:2106.04560, 2021.
+[8] Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch, Elena Buchatskaya, Trevor Cai, Eliza
+Rutherford, Diego de Las Casas, Lisa Anne Hendricks, Johannes Welbl, Aidan Clark, et al.
+Training compute-optimal large language models. arXiv preprint arXiv:2203.15556, 2022.
+[9] Mariya Toneva, Alessandro Sordoni, Remi Tachet des Combes, Adam Trischler, Yoshua Bengio,
+and Geoffrey J Gordon. An empirical study of example forgetting during deep neural network
+learning. In ICLR, 2019.
+[10] Mansheej Paul, Surya Ganguli, and Gintare Karolina Dziugaite. Deep learning on a data diet:
+Finding important examples early in training. Adv. Neural Inf. Process. Syst., 34, December
+2021.
+[11] Kashyap Chitta, José M Álvarez, Elmar Haussmann, and Clément Farabet. Training data subset
+search with ensemble active learning. IEEE Trans. Intell. Transp. Syst., pages 1–12, 2021.
+[12] Rishi Bommasani, Drew A Hudson, Ehsan Adeli, Russ Altman, Simran Arora, Sydney von
+Arx, Michael S Bernstein, Jeannette Bohg, Antoine Bosselut, Emma Brunskill, et al. On the
+opportunities and risks of foundation models. arXiv preprint arXiv:2108.07258, 2021.
+[13] Vitaly Feldman and Chiyuan Zhang. What neural networks memorize and why: Discovering
+the long tail via inﬂuence estimation. Adv. Neural Inf. Process. Syst., 33:2881–2891, 2020.
+[14] Hrayr Harutyunyan, Alessandro Achille, Giovanni Paolini, Orchid Majumder, Avinash
+Ravichandran, Rahul Bhotika, and Stefano Soatto. Estimating informativeness of samples
+with smooth unique information. In International Conference on Learning Representations,
+2021.
+[15] Burr Settles. Active learning literature survey. Technical Report, 2009.
+[16] Antoine Bordes, Seyda Ertekin, Jason Weston, Léon Botton, and Nello Cristianini. Fast kernel
+classiﬁers with online and active learning.J. Mach. Learn. Res., 6(9), 2005.
+[17] Zeyad Ali Sami Emam, Hong-Min Chu, Ping-Yeh Chiang, Wojciech Czaja, Richard Leapman,
+Micah Goldblum, and Tom Goldstein. Active learning at the ImageNet scale. arXiv preprint
+arXiv:2111.12880, 2021.
+[18] Ozan Sener and Silvio Savarese. Active learning for convolutional neural networks: A core-set
+approach. arXiv preprint arXiv:1708.00489, 2017.
+[19] Siddharth Karamcheti, Ranjay Krishna, Li Fei-Fei, and Christopher D Manning. Mind your
+outliers! Investigating the negative impact of outliers on active learning for visual question
+answering. arXiv preprint arXiv:2107.02331, 2021.
+[20] Baharan Mirzasoleiman, Jeff Bilmes, and Jure Leskovec. Coresets for data-efﬁcient training
+of machine learning models. In Hal Daumé Iii and Aarti Singh, editors, Proceedings of the
+37th International Conference on Machine Learning, volume 119 of Proceedings of Machine
+Learning Research, pages 6950–6960. PMLR, 2020.
+[21] V Birodkar, H Mobahi, and S Bengio. Semantic redundancies in Image-Classiﬁcation datasets:
+The 10% you don’t need. arXiv preprint arXiv:1901.11409, 2019.
+[22] Kristof Meding, Luca M. Schulze Buschoff, Robert Geirhos, and Felix A. Wichmann. Trivial or
+impossible—dichotomous data difﬁculty masks model differences (on ImageNet and beyond).
+In International Conference on Learning Representations, 2022.
+[23] Utkarsh Sharma and Jared Kaplan. Scaling laws from the data manifold dimension. Journal of
+Machine Learning Research, 23(9):1–34, 2022.
+11
+[24] Yasaman Bahri, Ethan Dyer, Jared Kaplan, Jaehoon Lee, and Utkarsh Sharma. Explaining
+neural scaling laws. CoRR, abs/2102.06701, 2021.
+[25] Jonathan S. Rosenfeld. Scaling Laws for Deep Learning. PhD thesis, Massachusetts Institute of
+Technology, USA, 2021.
+[26] A Engel and C V den Broeck. Statistical Mechanics of Learning. Cambridge Univ. Press, 2001.
+[27] Madhu Advani, Subhaneil Lahiri, and Surya Ganguli. Statistical mechanics of complex neural
+systems and high dimensional data. J. Stat. Mech: Theory Exp., 2013(03):P03014, 2013.
+[28] Yasaman Bahri, Jonathan Kadmon, Jeffrey Pennington, Sam S Schoenholz, Jascha Sohl-
+Dickstein, and Surya Ganguli. Statistical mechanics of deep learning. Annual Review of
+Condensed Matter Physics, March 2020.
+[29] Lenka Zdeborová and Florent Krzakala. Statistical physics of inference: thresholds and
+algorithms. Adv. Phys., 65(5):453–552, September 2016.
+[30] E Gardner. The space of interactions in neural network models. J. of Physics A, 21:257–270,
+1988.
+[31] H S Seung, H Sompolinsky, and N Tishby. Statistical mechanics of learning from examples.
+Phys. Rev. A, 45(8):6056, 1992.
+[32] Yoav Freund, H Sebastian Seung, Eli Shamir, and Naftali Tishby. Information, prediction, and
+query by committee. Adv. Neural Inf. Process. Syst., 5, 1992.
+[33] Hai-Jun Zhou. Active online learning in the binary perceptron problem. Commun. Theor. Phys.,
+71(2):243, February 2019.
+[34] Hugo Cui, Luca Saglietti, and Lenka Zdeborovà. Large deviations in the perceptron model and
+consequences for active learning, 2021.
+[35] M Mezard, G Parisi, and M A Virasoro. Spin glass theory and beyond . World scientiﬁc
+Singapore, 1987.
+[36] Mathilde Caron, Ishan Misra, Julien Mairal, Priya Goyal, Piotr Bojanowski, and Armand Joulin.
+Unsupervised learning of visual features by contrasting cluster assignments. In H. Larochelle,
+M. Ranzato, R. Hadsell, M.F. Balcan, and H. Lin, editors, Advances in Neural Information
+Processing Systems, volume 33, pages 9912–9924. Curran Associates, Inc., 2020.
+[37] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal,
+Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning transferable visual
+models from natural language supervision. In International Conference on Machine Learning,
+pages 8748–8763. PMLR, 2021.
+[38] Dhruv Mahajan, Ross Girshick, Vignesh Ramanathan, Kaiming He, Manohar Paluri, Yixuan Li,
+Ashwin Bharambe, and Laurens Van Der Maaten. Exploring the limits of weakly supervised
+pretraining. In Proceedings of the European conference on computer vision (ECCV), pages
+181–196, 2018.
+[39] Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu, and Mark Chen. Hierarchical
+text-conditional image generation with clip latents. arXiv preprint arXiv:2204.06125, 2022.
+[40] Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav Mishra, Adam
+Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Sebastian Gehrmann, et al. Palm:
+Scaling language modeling with pathways. arXiv preprint arXiv:2204.02311, 2022.
+[41] Priya Goyal, Quentin Duval, Jeremy Reizenstein, Matthew Leavitt, Min Xu, Benjamin
+Lefaudeux, Mannat Singh, Vinicius Reis, Mathilde Caron, Piotr Bojanowski, Armand Joulin,
+and Ishan Misra. VISSL. https://github.com/facebookresearch/vissl, 2021.
+[42] Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev Satheesh, Sean Ma, Zhiheng
+Huang, Andrej Karpathy, Aditya Khosla, Michael Bernstein, et al. ImageNet large scale visual
+recognition challenge. International Journal of Computer Vision, 115(3):211–252, 2015.
+[43] Kaiyu Yang, Klint Qinami, Li Fei-Fei, Jia Deng, and Olga Russakovsky. Towards fairer datasets:
+Filtering and balancing the distribution of the people subtree in the ImageNet hierarchy. In
+Proceedings of the 2020 Conference on Fairness, Accountability, and Transparency , pages
+547–558, 2020.
+12
+[44] Yuki M Asano, Christian Rupprecht, Andrew Zisserman, and Andrea Vedaldi. PASS:
+An ImageNet replacement for self-supervised pretraining without humans. arXiv preprint
+arXiv:2109.13228, 2021.
+[45] Ross Wightman. Pytorch image models. https://github.com/rwightman/
+pytorch-image-models, 2019.
+[46] Justin M Johnson and Taghi M Khoshgoftaar. Survey on deep learning with class imbalance.
+Journal of Big Data, 6(1):1–54, 2019.
+[47] Robert Geirhos, Kantharaju Narayanappa, Benjamin Mitzkus, Tizian Thieringer, Matthias
+Bethge, Felix A Wichmann, and Wieland Brendel. Partial success in closing the gap between
+human and machine vision. Advances in Neural Information Processing Systems, 34:23885–
+23899, 2021.
+[48] Felix A Wichmann, David HJ Janssen, Robert Geirhos, Guillermo Aguilar, Heiko H Schütt,
+Marianne Maertens, and Matthias Bethge. Methods and measurements to compare men against
+machines. Electronic Imaging, Human Vision and Electronic Imaging, 2017(14):36–45, 2017.
+[49] Robert Geirhos, Carlos RM Temme, Jonas Rauber, Heiko H Schütt, Matthias Bethge, and
+Felix A Wichmann. Generalisation in humans and deep neural networks. In Advances in Neural
+Information Processing Systems, 2018.
+[50] Robert Geirhos, Patricia Rubisch, Claudio Michaelis, Matthias Bethge, Felix A. Wichmann, and
+Wieland Brendel. ImageNet-trained CNNs are biased towards texture; increasing shape bias
+improves accuracy and robustness. In International Conference on Learning Representations,
+2019.
+[51] Haohan Wang, Songwei Ge, Zachary Lipton, and Eric P Xing. Learning robust global repre-
+sentations by penalizing local predictive power. Advances in Neural Information Processing
+Systems, 32, 2019.
+[52] Robert Geirhos, Kristof Meding, and Felix A Wichmann. Beyond accuracy: quantifying trial-
+by-trial behaviour of CNNs and humans by measuring error consistency. Advances in Neural
+Information Processing Systems, 33, 2020.
+[53] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Delving deep into rectiﬁers:
+Surpassing human-level performance on ImageNet classiﬁcation. InProceedings of the IEEE
+International Conference on Computer Vision, pages 1026–1034, 2015.
+[54] John P Miller, Rohan Taori, Aditi Raghunathan, Shiori Sagawa, Pang Wei Koh, Vaishaal
+Shankar, Percy Liang, Yair Carmon, and Ludwig Schmidt. Accuracy on the line: on the strong
+correlation between out-of-distribution and in-distribution generalization. In International
+Conference on Machine Learning, pages 7721–7735. PMLR, 2021.
+13
+Appendix
+Table of Contents
+A A theory of data-pruning for the perceptron: detailed derivations 14
+A.1 Problem setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+A.2 Main result and overview . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+A.3 Replica calculation of the generalization error . . . . . . . . . . . . . . . . . . 15
+A.4 Quenched entropy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+A.5 Perfect teacher-probe overlap . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+A.6 Information gain per example . . . . . . . . . . . . . . . . . . . . . . . . . . . 25
+A.7 Imperfect teacher-probe overlap . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+A.8 Optimal pruning policy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+A.9 Exact saddle point equations . . . . . . . . . . . . . . . . . . . . . . . . . . . . 28
+B Model training method details & dataset information 31
+C Breaking compute scaling laws via data pruning 32
+D Additional scaling experiments 33
+E Extremal images according to different metrics 33
+F Impact of number of clusters k on self-supervised prototypes 44
+G Impact of ensemble prototypes 44
+H Relationship between pruning and class (im-)balance 44
+I Effect of pruning on class-conditional accuracy and fairness 50
+J Interaction between data pruning and training duration 50
+K Out-of-distribution (OOD) analysis of dataset pruning 51
+A A theory of data-pruning for the perceptron: detailed derivations
+All code required to reproduce the theory ﬁgures and numerical simulations throughout this paper can
+be run in the Colab notebook at https://colab.research.google.com/drive/1in35C6jh7y_
+ynwuWLBmGOWAgmUgpl8dF?usp=sharing.
+A.1 Problem setup
+In this section we introduce a theory for data pruning in the teacher-student perceptron setting, using
+the tools of statistical mechanics. We study the problem of classifying a dataset of P examples
+{xµ, yµ}µ=1,...,P , where xµ∼N (0, IN) are i.i.d. zero mean unit variance random Gaussian inputs,
+and yµ = sign(T· x) are labels generated by a teacher perceptron T∈ RN , which we will assume
+is randomly drawn from a uniform distribution on the sphere T∼ Unif(SN−1(
+√
+N)). We work in
+the high-dimensional statistics limit where N, P→∞ but the ratio αtot = P/N remains O(1). The
+generalization error of a perceptron trained on such an isotropic dataset is a classical problem (see
+e.g. [26]). However, we are interested in the setting where the training dataset is not isotropic, but
+instead has inherited some structure due to data pruning.
+14
+In particular, consider pruning the training dataset by keeping only the examples with the smallest
+margin|zµ| = |Jprobe· xµ| along a probe student Jprobe. The pruned dataset will follow some
+distribution p(z) along the direction of Jprobe, and remain isotropic in the nullspace of Jprobe. In
+what follows we will derive a general theory for an arbitrary data distribution p(z), and specialize
+to the case of small-margin pruning only at the very end (in which case p(z) will take the form of a
+truncated Gaussian). We will also make no assumptions on the form of the probe student Jprobe or the
+learning rule used to train it; only that Jprobe has developed some overlap with the teacher, quantiﬁed
+by the angle θ = cos−1 ( Jprobe·T
+∥Jprobe∥2∥T∥2
+)
+(Fig. 2A).
+After the dataset has been pruned, we consider training a new student J from scratch on the pruned
+dataset. A typical training algorithm (used in support vector machines and the solution to which
+SGD converges on separable data) is to ﬁnd the solution J which classiﬁes the training data with
+the maximal margin κ = minµ J· (yµxµ). Our goal is to compute the generalization error εg
+of this student, which is simply governed by the overlap between the student and the teacher,
+εg = cos−1(R)/π, where R = J· T/∥J∥2∥T∥2.
+A.2 Main result and overview
+Our main result is a set of self-consistent equations which can be solved to obtain the generalization
+error ε(α, p, θ) for any α and any data distribution p(z) along a probe student at any angle θ relative
+to the teacher. These equations take the form,
+R− ρ cos θ
+sin2 θ = α
+πΛ
+⟨ ∫ κ
+−∞
+dt exp
+(
+−∆(t, z)
+2Λ2
+)
+(κ− t)
+⟩
+z
+(1)
+1− ρ2 + R2− 2ρR cos θ
+sin2 θ = 2α
+⟨ ∫ κ
+−∞
+dt e
+− (t−ρz)2
+2(1−ρ2 )
+√
+2π
+√
+1− ρ2 H
+( Γ(t, z)√
+1− ρ2Λ
+)
+(κ− t)2
+⟩
+z
+(2)
+ρ− R cos θ
+sin2 θ = 2α
+⟨ ∫ κ
+−∞
+dt e
+− (t−ρz)2
+2(1−ρ2 )
+√
+2π
+√
+1− ρ2 H
+( Γ(t, z)√
+1− ρ2Λ
+)(z− ρt
+1− ρ2
+)
+(κ− t)
++ 1
+2πΛ exp
+(
+−∆(t, z)
+2Λ2
+) (ρR− cos θ
+1− ρ2
+)
+(κ− t)
+⟩
+z
+(3)
+Where,
+Λ =
+√
+sin2 θ− R2− ρ2 + 2ρR cos θ, (4)
+Γ(t, z) = z(ρR− cos θ)− t(R− ρ cos θ), (5)
+∆(t, z) = z2 (
+ρ2 + cos2 θ− 2ρR cos θ
+)
++ 2tz(R cos θ− ρ) + t2 sin2 θ. (6)
+Where⟨·⟩z represents an average over the pruned data distribution p(z) along the probe student.
+For any α, p(z), θ, these equations can be solved for the order parameters R, ρ, κ, from which the
+generalization error can be easily read off as εg = cos−1(R)/π. This calculation results in the solid
+theory curves in Figs 1,2,3, which show an excellent match to numerical simulations. In the following
+section we will walk through the derivation of these equations using replica theory. In Section A.6
+we will derive an expression for the information gained per training example, and show that with
+Pareto optimal data pruning this information gain can be made to converge to a ﬁnite rate, resulting
+in at least exponential decay in test error. In Section A.7, we will show that super-exponential scaling
+eventually breaks down when the probe student does not match the teacher perfectly, resulting in
+power law scaling at at a minimum pruning fraction fmin(θ).
+A.3 Replica calculation of the generalization error
+To obtain Eqs. 1,2,3, we follow the approach of Elizabeth Gardner and compute the volume
+Ω(xµ, T, κ) of solutions J which perfectly classify the training data up to a margin κ (known as the
+15
+Gardner volume) [30, 26]. As κ grows, the volume of solutions shrinks until it reaches a unique
+solution at a critical κ, the max-margin solution. The Gardner volume Ω takes the form,
+Ω(xµ, T, κ) =
+∫
+dµ(J)
+∏
+µ
+Θ
+(T· xµ
+√
+N
+(J· xµ
+√
+N
+− κ
+))
+(7)
+Because the student’s decision boundary is invariant to an overall scaling of J, we enforce normaliza-
+tion of J via the measure dµ(J),
+dµ(J) = 1
+(2πe)N/2 δ(∥J∥2− N) (8)
+In the thermodynamic limit N, P→∞ the typical value of the entropy S(κ) =⟨⟨log Ω(xµ, T, κ)⟩⟩
+is dominated by particular values of R, κ, where the double angle brackets⟨⟨·⟩⟩ denote a quenched
+average over disorder introduced by random realizations of the training examples xµ and the teacher
+T. However, computing this quenched average is intractable since the integral over J cannot be
+performed analytically for every individual realization of the examples. We rely on the replica trick
+from statistical physics,
+ln(x) = lim
+n→0
+xn− 1
+n (9)
+Which allows us to evaluate S(κ) in terms of easier-to-compute powers of Ω,
+S(κ) =⟨⟨ln Ω(xµ, T, κ)⟩⟩ =⟨⟨Ωn(xµ, T, κ)⟩⟩− 1
+n (10)
+This reduces our problem to computing powers of Ω, which for integer n can be written in terms of
+α = 1, . . . , nreplicated copies of the original system,
+Ω(n)≡⟨⟨ Ωn(xµ, T, κ)⟩⟩ =
+⟨⟨ ∫ n∏
+α=1
+dµ(Jα)
+∏
+α,µ
+Θ
+(T· xµ
+√
+N
+(J· xµ
+√
+N
+− κ
+))⟩⟩
+(11)
+We begin by introducing auxiliary variables,
+λα
+µ = Jα· xµ
+√
+N
+, u µ = T· xµ
+√
+N
+(12)
+by δ−functions, to pull the dependence on J and T outside of the Heaviside function,
+Ω(n) =
+∫ n∏
+α=1
+dµ(Jα)
+∫ ∏
+α,µ
+dλα
+µ
+∫ ∏
+µ
+duµ
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)
+×
+⟨⟨
+δ
+(
+λα
+µ− 1√
+N
+Jα· xµ
+)
+δ
+(
+uµ− 1√
+N
+T· xµ
+)⟩⟩
+(13)
+Using the integral representation of the δ-functions,
+Ω(n) =
+∫ n∏
+α=1
+dµ(Jα)
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π (14)
+×
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)
+exp
+(
+i
+∑
+µ,α
+λα
+µˆλα
+µ + i
+∑
+µ
+uµˆuµ
+)
+(15)
+×⟨⟨ exp
+(
+− i√
+N
+∑
+µ,α
+ˆλα
+µJα· xµ− i√
+N
+∑
+µ
+ˆuµT· xµ
+)
+⟩⟩ (16)
+16
+The data obeys some distribution p(z) along the direction of Jprobe and is isotropic in the nullspace of
+Jprobe. Hence we can decompose a training examplexµ as follows, xµ = Jprobezµ+(I−JprobeJT
+probe)sµ,
+where zµ∼ p(z) and sµ∼N (0, IN),
+Ω(n) =
+∫ n∏
+α=1
+dµ(Jα)
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π (17)
+×
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)
+exp
+(
+i
+∑
+µ,α
+λα
+µˆλα
+µ + i
+∑
+µ
+uµˆuµ
+)
+(18)
+×
+⟨⟨
+exp
+(
+− i√
+N
+∑
+µ,α
+ˆλα
+µ(Jα· Jprobezµ + Jα
+⊥· sµ)− i√
+N
+∑
+µ
+ˆuµ(T· Jprobezµ + T⊥· sµ
+)⟩⟩
+(19)
+Where J⊥ = (1− JprobeJT
+probe)J and T⊥ = (1− JprobeJT
+probe)T. Now we can average over the patterns
+sµ∼N (0, IN),
+⟨
+exp
+(
+− i√
+N
+∑
+µ,α
+ˆλα
+µJα
+⊥· sµ− i√
+N
+∑
+µ
+ˆuµT⊥· sµ
+)⟩
+sµ
+= exp
+(
+− 1
+2N∥
+∑
+µ,α
+ˆλα
+µJα
+⊥ + ˆuµT⊥∥2
+)
+(20)
+= exp
+(
+− 1
+2N
+∑
+µ
+(∑
+αβ
+ˆλα
+µˆλβ
+µJα
+⊥· Jβ
+⊥ + 2
+∑
+α
+ˆλα
+µ ˆuµJα
+⊥· T⊥ + ˆu2
+µ∥T⊥∥2
+))
+. (21)
+Inserting this back into our expression for the Gardner volume,
+Ω(n) =
+∫ n∏
+α=1
+dµ(Jα)
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π
+×
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)
+exp
+(
+i
+∑
+µ,α
+λα
+µˆλα
+µ + i
+∑
+µ
+uµˆuµ
+)
+×
+⟨⟨
+exp
+[
+− 1
+2N
+∑
+µ
+(∑
+αβ
+ˆλα
+µˆλβ
+µJα
+⊥· Jβ
+⊥ + 2
+∑
+α
+ˆλα
+µ ˆuµJα
+⊥· T⊥ + ˆu2
+µ∥T⊥∥2
+)
+− i
+∑
+µ
+(∑
+α
+ˆλα
+µJα· Jprobe + ˆuµT· Jprobe
+)
+zµ
+]⟩⟩
+T,zµ
+(22)
+As is typical in replica calculations of this type, we now introduce order parameters,
+qαβ = Jα· Jβ
+N , R α = T· Jα
+N (23)
+which will allow us to decouple the J- from the λ-µ-z- integrals. qαβ represents the overlaps between
+replicated students, and Rα the overlap between each replicated student and the teacher. However,
+because our problem involves the additional role of the probe student, we must introduce an additional
+order parameter,
+ρα = Jα· Jprobe
+N (24)
+which represents the overlap between each replicated student and the probe student. Notice that,
+Jα
+⊥· Jβ
+⊥ = Jα· Jβ− Jα
+∥· Jβ
+∥ = N(qαβ− ραρβ) (25)
+17
+Jα
+⊥· T⊥ = Jα· T− Jα
+∥· T∥ = N(Rα− ρα cos θ) (26)
+With this new set of order parameters in hand, we can decouple the J from the λ− u− z−integrals.
+Ω(n) =
+∫ ∏
+α<β
+dqαβ
+∫ ∏
+α
+dRα
+∫ ∏
+α
+dρα
+×
+∫ n∏
+α=1
+dµ(Jα)
+⟨ ∏
+α
+δ(T· Jα− N Rα)
+⟩
+T
+∏
+α<β
+δ(Jα· Jβ− N qαβ)
+∏
+α
+δ(Jα· Jprobe− N ρα)
+×
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)∏
+µ
+exp
+(
+i
+∑
+α
+λα
+µˆλα
+µ + iuµˆuµ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+αβ
+ˆλα
+µˆλβ
+µ(qαβ− ραρβ)−
+∑
+α
+ˆλα
+µ ˆuµ(Rα− ρα cos θ)− 1
+2 ˆu2
+µ sin2 θ
+− i
+(∑
+α
+ˆλα
+µρα + ˆuµ cos θ
+)
+zµ
+]⟩
+zµ
+(27)
+We can now perform the gaussian integral over ˆuµ,
+Ω(n) =
+∫ ∏
+α<β
+dqαβ
+∫ ∏
+α
+dRα
+∫ ∏
+α
+dρα
+×
+∫ n∏
+α=1
+dµ(Jα)
+⟨ ∏
+α
+δ(T· Jα− N Rα)
+⟩
+T
+∏
+α<β
+δ(Jα· Jβ− N qαβ)
+∏
+α
+δ(Jα· Jprobe− N ρα)
+×
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)∏
+µ
+exp
+(
+i
+∑
+α
+λα
+µˆλα
+µ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+αβ
+ˆλα
+µˆλβ
+µ(qαβ− ραρβ)− i
+∑
+α
+ˆλα
+µραzµ
++ 1
+2 sin2 θ
+(
+i(uµ− zµ cos θ)−
+∑
+α
+ˆλα
+µ(Rα− ρα cos θ)
+)2]⟩
+zµ
+(28)
+Expanding,
+18
+Ω(n) =
+∫ ∏
+α<β
+dqαβ
+∫ ∏
+α
+dRα
+∫ ∏
+α
+dρα
+×
+∫ n∏
+α=1
+dµ(Jα)
+⟨ ∏
+α
+δ(T· Jα− N Rα)
+⟩
+T
+∏
+α<β
+δ(Jα· Jβ− N qαβ)
+∏
+α
+δ(Jα· Jprobe− N ρα)
+×
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)∏
+µ
+exp
+(
+i
+∑
+α
+λα
+µˆλα
+µ− 1
+2
+(uµ− zµ cos θ)2
+sin2 θ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+αβ
+ˆλα
+µˆλβ
+µ(qαβ− ραρβ)− i
+∑
+α
+ˆλα
+µραzµ
+− i
+sin2 θ
+(
+uµ− zµ cos θ)
+∑
+α
+ˆλα
+µ(Rα− ρα cos θ) + 1
+2 sin2 θ
+∑
+αβ
+ˆλα
+µˆλβ
+µ(Rα− ρα cos θ)(Rβ− ρβ cos θ)
+]⟩
+zµ
+(29)
+Simplifying,
+Ω(n) =
+∫ ∏
+α<β
+dqαβ
+∫ ∏
+α
+dRα
+∫ ∏
+α
+dρα
+×
+∫ n∏
+α=1
+dµ(Jα)
+⟨ ∏
+α
+δ(T· Jα− N Rα)
+⟩
+T
+∏
+α<β
+δ(Jα· Jβ− N qαβ)
+∏
+α
+δ(Jα· Jprobe− N ρα)
+×
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)
+exp
+(
+i
+∑
+µ,α
+λα
+µˆλα
+µ− 1
+2
+(uµ− zµ cos θ)2
+sin2 θ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+µ
+∑
+αβ
+ˆλα
+µˆλβ
+µ
+(
+qαβ− ραρβ− (Rα− ρα cos θ)(Rβ− ρβ cos θ)
+sin2 θ
+)
+− i
+∑
+µ
+∑
+α
+ˆλα
+µραzµ
+− i
+sin2 θ
+(
+uµ− zµ cos θ)
+∑
+α
+ˆλα
+µ(Rα− ρα cos θ)
+]⟩
+zµ
+(30)
+Now we introduce integral representations for the remaining delta functions, including the measure
+dµ(Jα), for which we introduce the parameter ˆkα,
+19
+Ω(n) =
+∫ ∏
+α
+dˆkα
+4π
+∫ ∏
+α<β
+dqαβdˆqαβ
+2π/N
+∫ ∏
+α
+dRαd ˆRα
+2π/N
+∫ ∏
+α
+dραdˆρα
+2π/N
+× exp
+(
+i N
+2
+∑
+α
+ˆkα + iN
+∑
+α<β
+qαβ ˆqαβ + iN
+∑
+α
+Rα ˆRα + iN
+∑
+α
+ρα ˆρα
+)
+×
+∫ ∏
+i,α
+dJα
+i√
+2πe exp
+(
+− i
+2
+∑
+α
+ˆkα∥Jα∥2− i
+∑
+α<β
+ˆqαβJα· Jβ− i
+∑
+α
+ˆRαJα· T− i
+∑
+α
+ˆραJα· Jprobe
+)
+×
+∫ ∏
+α,µ
+dλα
+µdˆλα
+µ
+2π
+∫ ∏
+µ
+duµdˆuµ
+2π
+∏
+α,µ
+Θ
+(
+uµ(λα
+µ− κ)
+)
+exp
+(
+i
+∑
+µ,α
+λα
+µˆλα
+µ− 1
+2
+(uµ− zµ cos θ)2
+sin2 θ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+µ
+∑
+αβ
+ˆλα
+µˆλβ
+µ
+(
+qαβ− ραρβ− (Rα− ρα cos θ)(Rβ− ρβ cos θ)
+sin2 θ
+)
+− i
+∑
+µ
+∑
+α
+ˆλα
+µραzµ
+− i
+sin2 θ
+(
+uµ− zµ cos θ)
+∑
+α
+ˆλα
+µ(Rα− ρα cos θ)
+]⟩
+zµ
+(31)
+Notice that the uµ− λα
+µ− ˆλα
+µ− zµ-integrals factorize in µ, and can be written as a single integral to
+the power of P = αN.
+Ω(n) = k
+∫ ∏
+α
+dˆkα
+4π
+∫ ∏
+α<β
+dqαβdˆqαβ
+2π/N
+∫ ∏
+α
+dRαd ˆRα
+2π/N
+∫ ∏
+α
+dραdˆρα
+2π/N
+× exp
+(
+N
+[i
+2
+∑
+α
+ˆkα + i
+∑
+α<β
+qαβ ˆqαβ + i
+∑
+α
+Rα ˆRα + i
+∑
+α
+ρα ˆρα
++ GS(ˆkα, ˆqαβ, ˆRα, ˆρα) + αGE(qαβ, Rα, ρα)
+])
+(32)
+Where we have written the Gardner volume in terms of an entropic part GS, which measures how
+many spherical couplings satisfy the constraints,
+GS = 1
+N log
+∫ ∏
+α
+dJα
+√
+2πe exp
+(
+− i
+2
+∑
+α
+ˆkα∥Jα∥2−i
+∑
+α<β
+ˆqαβJα·Jβ−i
+∑
+α
+ˆRαJα·T−i
+∑
+α
+ˆραJα·Jprobe
+)
+(33)
+And an energetic part GE,
+GE = log
+∫ du√
+2π
+∫ ∏
+α
+dλαdˆλα
+2π
+∏
+α
+Θ
+(
+u(λα− κ)
+)
+exp
+(
+i
+∑
+α
+λαˆλα− 1
+2
+(uµ− zµ cos θ)2
+sin2 θ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+αβ
+ˆλαˆλβ
+(
+qαβ− ραρβ− (Rα− ρα cos θ)(Rβ− ρβ cos θ)
+sin2 θ
+)
+− i
+∑
+α
+ˆλαραz
+− i
+sin2 θ
+(
+u− z cos θ)
+∑
+α
+ˆλα(Rα− ρα cos θ)
+]⟩
+z
+(34)
+We ﬁrst evaluate the entropic part,GS, by introducing the n× n matrices A, B,
+Aαβ = iˆkαδαβ + iˆqαβ(1− δαβ) (35)
+Bαβ = δαβ + qαβ(1− δαβ) (36)
+20
+Inserting this our expression for GS becomes
+GS = 1
+N log
+∫ ∏
+α
+dJα
+√
+2πe exp
+(
+− 1
+2
+∑
+α,β
+JαT AαβJβ− i
+∑
+α
+Jα· (T ˆRα + Jprobe ˆρα)
+)
+(37)
+Integrating over Jα,
+GS =− n
+2− 1
+2 log(det A)− 1
+2N
+∑
+α,β
+(T ˆRα + Jprobe ˆρα)T A−1
+αβ(T ˆRβ + Jprobe ˆρβ) (38)
+Now we can include the remaining terms in the expression for Ω(n) outside of GE and GS by noting
+that
+tr(AB) =
+∑
+αβ
+AαβBβα (39)
+=
+∑
+αβ
+(iˆkαδαβ + iˆqαβ(1− δαβ))(δαβ + qαβ(1− δαβ)) (40)
+=
+∑
+α
+iˆkα + 2
+∑
+α<β
+iqαβ ˆqαβ (41)
+Additionally, we can use log detA = tr(log A). Thus all terms in the exponent except GE can be
+written as
+− n
+2−1
+2 tr(log A)− 1
+2N
+∑
+α,β
+(T ˆRα+Jprobe ˆρα)T A−1
+αβ(T ˆRβ+Jprobe ˆρβ)+1
+2 tr(AB)+i
+∑
+α
+Rα ˆRα+i
+∑
+α
+ρα ˆραJprobe
+(42)
+Now we extremize wrt ˆRα and the elements of A by setting the derivatives wrt ˆRγ, ˆργ and Aγδ equal
+to zero:
+0 =−
+∑
+α
+A−1
+αγ T· (T ˆRα + Jprobe ˆρα) + iRγ =−
+∑
+α
+A−1
+αγ( ˆRα + ˆρα cos θ) + iRγ (43)
+0 =−
+∑
+α
+A−1
+αγ Jprobe· (T ˆRα + Jprobe ˆρα) + iργ =−
+∑
+α
+A−1
+αγ( ˆRα cos θ + ˆρα) + iργ (44)
+0 =−1
+2 A−1
+γδ + 1
+2
+∑
+α,β
+(T ˆRα + Jprobe ˆρα)T A−1
+αγ A−1
+βδ (T ˆRβ + Jprobe ˆρβ) + 1
+2 Bγδ (45)
+Solving these gives
+ˆRα = i
+∑
+β
+Aαβ
+Rβ− ρβ cos θ
+sin2 θ (46)
+ˆρα = i
+∑
+β
+Aαβ
+ρβ− Rβ cos θ
+sin2 θ (47)
+and
+A−1
+γδ = Bγδ− RγRδ− Rγρδ cos θ− Rδργ cos θ + ργρδ
+sin2 θ ≡ Cγδ (48)
+and now we are left with
+Ω(n)∼ exp
+(
+Nextrqαβ,Rα,ρα
+[1
+2 tr(log C) + αGE(qαβ, Rα)
+])
+(49)
+21
+A.3.1 Replica symmetry ansatz
+In order to extremize wrt qαβ, Rα, ρα, we take the replica symmetry ansatz [26],
+qαβ = q, R α = R, ρ α = ρ (50)
+Then C takes the form
+Cαβ = δαβ− R2− 2Rρ cos θ + ρ2
+sin2 θ + q(1− δαβ) (51)
+A matrix with E on the diagonal and F elsewhere, Cαβ = Eδαβ + F (1− δαβ), has n− 1 degenerate
+eigenvalues E− F and one eigenvalue E + (n− 1)F . Hence in our case C has n− 1 degenerate
+eigenvalues
+(
+1− R2− 2Rρ cos θ + ρ2
+sin2 θ
+)
+−
+(
+q− R2− 2Rρ cos θ + ρ2
+sin2 θ
+)
+= 1− q (52)
+and one other eigenvalue,
+(
+1− R2− 2Rρ cos θ + ρ2
+sin2 θ
+)
++(n−1)
+(
+q− R2− 2Rρ cos θ + ρ2
+sin2 θ
+)
+= 1−q+n
+(
+q− R2− 2Rρ cos θ + ρ2
+sin2 θ
+)
+(53)
+Therefore,
+tr(log C) = (n− 1) log
+(
+1− q
+)
++ log
+[
+1− q + n
+(
+q− R2− 2Rρ cos θ + ρ2
+sin2 θ
+)]
+= n log
+(
+1− q
+)
++ log
+[
+1 + n
+(q sin2 θ− (R2− 2Rρ cos θ + ρ2)
+(1− q) sin2 θ
+)] (54)
+We next evaluate the energetic part,GE,
+GE = log
+∫ du√
+2π
+∫ ∏
+α
+dλαdˆλα
+2π
+∏
+α
+Θ
+(
+u(λα− κ)
+)
+exp
+(
+i
+∑
+α
+λαˆλα− 1
+2
+(u− z cos θ)2
+sin2 θ
+)
+×
+⟨
+exp
+[
+− 1
+2
+∑
+α
+(ˆλα)2
+(
+1− ρ2− (R− ρ cos θ)2
+sin2 θ
+)
+− 1
+2
+∑
+α̸=β
+ˆλαˆλβ
+(
+q− ρ2− (R− ρ cos θ)2
+sin2 θ
+)
+− i
+∑
+α
+ˆλαραz− i
+sin2 θ
+(
+u− z cos θ)
+∑
+α
+ˆλα(Rα− ρα cos θ)
+]⟩
+z
+(55)
+First note that we can rewrite the terms
+− 1
+2
+∑
+α
+(
+1− ρ2− (R− ρ cos θ)
+sin2 θ
+)
+(ˆλα)2− 1
+2
+∑
+α̸=β
+ˆλαˆλβ
+(
+q− ρ2− (R− ρ cos θ)2
+sin2 θ
+)
+=−1
+2
+∑
+α
+(
+1− ρ2− (R− ρ cos θ)2
+sin2 θ
+)
+(ˆλα)2− 1
+2
+(
+q− ρ2− (R− ρ cos θ)2
+sin2 θ
+)[
+(
+∑
+α
+ˆλα)2−
+∑
+α
+(ˆλα)2
+]
+=−1
+2
+∑
+α
+(1− q)(ˆλα)2− 1
+2
+(
+q− ρ2− (R− ρ cos θ)2
+sin2 θ
+)
+(
+∑
+α
+ˆλα)2
+(56)
+22
+To simplify the last term we apply the Hubbard-Stratonovich transformation, eb2/2 =
+∫
+Dtebt,
+introducing auxiliary ﬁeldt,
+= log
+∫ du√
+2π
+∫ ∏
+α
+dλαdˆλα
+2π
+∏
+α
+Θ
+(
+u(λα− κ)
+)∫
+Dt
+⟨
+exp
+[
+− 1− q
+2
+∑
+α
+(ˆλα)2
++i
+∑
+α
+ˆλα
+(
+λα−ραz−
+(
+u− z cos θ)(Rα− ρα cos θ)
+sin2 θ −
+√
+q− ρ2− (R− ρ cos θ)2
+sin2 θ t
+)
+−1
+2
+(u− z cos θ)2
+sin2 θ
+]⟩
+z
+(57)
+Using the Θ-function to restrict the bounds of integration,
+= log 2
+∫ ∞
+0
+du√
+2π
+∫ ∞
+κ
+∏
+α
+dλα
+√
+2π
+∫ ∏
+α
+dˆλα
+√
+2π
+∫
+Dt
+⟨
+exp
+[
+− 1− q
+2
+∑
+α
+(ˆλα)2
++i
+∑
+α
+ˆλα
+(
+λα−ραz−
+(
+u− z cos θ)(Rα− ρα cos θ)
+sin2 θ −
+√
+q− ρ2− (R− ρ cos θ)2
+sin2 θ t
+)
+−1
+2
+(u− z cos θ)2
+sin2 θ
+]⟩
+z
+(58)
+Now we can perform the gaussian integrals over ˆλα,
+= log 2
+∫ ∞
+0
+du√
+2π
+∫ ∞
+κ
+∏
+α
+dλα
+√
+2π
+∫
+Dt
+⟨
+exp
+[
+− 1
+2(1− q)
+(
+λα− ραz
+−
+(
+u− z cos θ)(Rα− ρα cos θ)
+sin2 θ −
+√
+q− ρ2− (R− ρ cos θ)2
+sin2 θ t
+)2
+− 1
+2
+(u− z cos θ)2
+sin2 θ
+]⟩
+z
+(59)
+And λα,
+= log 2
+∫ ∞
+0
+du√
+2π
+∫
+Dt
+⟨
+Hn
+[
+− 1√1− q
+(
+κ−ραz+
+(
+u− z cos θ)(Rα− ρα cos θ)
+sin2 θ +
+√
+q− ρ2− (R− ρ cos θ)2
+sin2 θ t
+)2]
+× exp
+[
+− 1
+2
+(u− z cos θ)2
+sin2 θ
+]⟩
+z
+(60)
+Shifting the integration variablet→ (ραz+ (u−z cosθ)(Rα−ρα cosθ)
+sin2θ +
+√
+q− ρ2− (R−ρ cosθ)2
+sin2θ t)/√q,
+we can ﬁnally perform the gaussian integral overu,
+= log 2
+∫ dt√
+2π
+⟨
+exp
+(
+− (√qt− zρ)2
+2(q− ρ)2
+)√ q
+q− ρ2 Hn
+(
+−
+√ q
+1− q t
+)
+× H
+( 1√
+q− ρ2
+κ− (qR0z + zρ(R− 2ρ cos θ)−√qt(R− ρ cos θ))√
+q sin2 θ + 2Rρ cos θ− R2− ρ
+)⟩
+z
+(61)
+We can simplify this further by taking t→ (√qt− zρ)/
+√
+q− ρ2,
+= log 2
+∫
+Dt
+⟨
+Hn
+(κ− (zρ +
+√
+q− ρ2)t√1− q
+)
+H
+(t
+(√
+q− ρ2 + ρz
+)
+(R− ρ cos θ) + qz cos θ− ρRz
+√
+− (q− ρ2)
+(
+ρ2− q sin2 θ + R2− 2ρR cos θ
+)
+)⟩
+z
+(62)
+23
+A.4 Quenched entropy
+Putting everything together, and using the replica identity,⟨log Ω⟩=limn→0(⟨Ωn⟩− 1)/n, we obtain
+an expression for the quenched entropy of the teacher-student perceptron under data pruning:
+1
+N⟨log Ω⟩ = extrq,R,ρ
+[1
+2 log
+(
+1− q
+)
++ 1
+2
+(q− (R2− 2Rρ cos θ + ρ2)/ sin2 θ
+1− q
+)
++ 2α
+⟨ ∫
+Dt log H
+(κ− (zρ +
+√
+q− ρ2)t√1− q
+)
+× H
+(t
+(√
+q− ρ2 + ρz
+)
+(R− ρ cos θ) + z(q cos θ− ρR)
+√
+(q− ρ2)
+(
+R2 + ρ2− q sin2 θ− 2ρR cos θ
+)
+)⟩
+z
+]
+(63)
+We will now unpack this equation and use it to make predictions in several speciﬁc settings.
+A.5 Perfect teacher-probe overlap
+We will begin by considering the case where the probe student has learned to perfectly match the
+teacher, Jprobe = T , which we can obtain by the limit θ→ 0, ρ→ R. In this limit the second
+H-function in Eq. 63 becomes increasingly sharp, approaching a step function:
+H
+(t
+(√
+q− ρ2 + ρz
+)
+(R− ρ cos θ) + z(q cos θ− ρR)
+√
+(q− ρ2)
+(
+R2 + ρ2− q sin2 θ− 2ρR cos θ
+)
+)
+→ Θ(z) (64)
+Hence we are left with,
+1
+N⟨⟨ln Ω(xµ, T, κ)⟩⟩ = extrq,R
+[1
+2 log
+(
+1− q
+)
++ 1
+2
+(q− R2
+1− q
+)
++ 2α
+∫
+Dt
+∫
+dzp(z)Θ(z) logH
+(
+−
+√
+q− R2t + Rz− κ√1− q
+)]
+(65)
+A.5.1 Saddle point equations
+We can now obtain a set of self-consistent saddle point equations by setting set to zero the derivatives
+with respect to R and q of the right side of Eq. 65. As κ approaches its critical value, the space of
+solutions shrinks to a unique solution, and hence the overlap between students q approaches one. In
+the limit q→ 1, after some partial integration, we ﬁnd,
+R = 2α
+∫ κ
+−∞
+dt√
+2π
+√
+1− R2
+∫ ∞
+0
+dzp(z) exp
+(
+− (t− Rz)2
+2(1− R2)
+)(z− Rt
+1− R2
+)
+(κ− t) (66)
+1− R2 = 2α
+∫ κ
+−∞
+dt√
+2π
+√
+1− R2
+∫ ∞
+0
+dzp(z) exp
+(
+− (t− Rz)2
+2(1− R2)
+)(
+κ− t
+)2
+(67)
+These saddle point equations can be solved numerically to ﬁnd R and κ as a function of α for a
+student perceptron trained on a dataset with an arbitrary distribution along the teacher direction p(z).
+We can specialize to the case of data pruning by setting p(z) to the distribution found after pruning
+an initially Gaussian-distributed dataset so that only a fraction f of those examples with the smallest
+margin along the teacher are kept, p(z) = e−z2/2
+√
+2πf Θ(γ−| z|), where the threshold γ = H−1(1−f
+2
+)
+.
+24
+R = 2α
+f
+√
+2π
+√
+1− R2
+∫ κ
+−∞
+Dt exp
+(
+− R2t2
+2(1− R2)
+)[
+1− exp
+(
+− γ(γ− 2Rt)
+2(1− R2)
+)]
+(κ− t) (68)
+1− R2 = 2α
+f
+∫ κ
+−∞
+Dt
+[
+H
+(
+− Rt√
+1− R2
+)
+− H
+(
+− Rt− γ√
+1− R2
+)]
+(κ− t)2 (69)
+Solving these saddle point equations numerically for R and κ yields an excellent ﬁt to numerical
+simulations, as can be seen in Fig. 1A. It is also easy to verify that in the limit of no data pruning
+(f→ 1, γ→∞ ) we recover the saddle point equations for the classical teacher-student perceptron
+(Eqs. 4.4 and 4.5 in [26]),
+R = 2α√
+2π
+√
+1− R2
+∫
+Dt exp
+(
+− R2t2
+2(1− R2)
+)
+(κ− t) (70)
+1− R2 = 2α
+∫
+Dt H
+(
+− Rt√
+1− R2
+)(
+κ− t
+)2
+(71)
+A.6 Information gain per example
+Why does data pruning allow for super-exponential performance with dataset size α? We can
+deﬁne the amount of information gained from each new example,I(α),as the fraction by which the
+space of solutions which perfectly classify the data is reduced when a new training example is added,
+I(α) = Ω(P+1
+N )/Ω(P
+N ). Or, equivalently, the rate at which the entropy is reduced,I(α) =− d
+dα S(α).
+Of coure, the volume of solutions shrinks to zero at the max-margin solution; so to study the volume
+of solutions which perfectly classify the data we simply set the margin to zero κ = 0. In [ 32] the
+information gain for a perceptron in the classical teacher-student setting is shown to take the form,
+I(α) =−2
+∫
+Dt H
+(√
+R
+1− R t
+)
+log H
+(√
+R
+1− R t
+)
+(72)
+Which goes to zero in the limit of large α as I(α)∼ 1/α. Data pruning can increase the information
+gained per example by pruning away the uninformative examples. To show this, we generalize
+the calculation of the information gain to pruned datasets, using the expression for the entropy we
+obtained in the previous section (Eq. 65).
+S(α) = 1
+N⟨log Ω⟩ = extrq,R
+[1
+2 log
+(
+1−R
+)
++1
+2 R+2α
+∫
+Dt
+∫ ∞
+0
+dz p(z) logH
+(
+−
+√
+Rt− R√
+1− R z
+)]
+(73)
+Hence the information gain I(α) =− d
+dα S(α) is given by
+I(α) = 2α
+∫
+Dt
+∫
+dzp(z)Θ(z) logH
+(
+−
+√
+Rt− R√
+1− R z
+)
+(74)
+Changing variables to t→− (
+√
+Rt + R√1−R z)/√q,
+I(α) = 2α
+∫
+Dt
+∫ ∞
+0
+dzp(z) 1√
+1− R
+1√
+2π exp
+(
+− z2 + 2
+√
+Rtz
+2(1− R)
+)
+log H
+(√
+R
+1− R t
+)
+(75)
+Now, assuming that we prune to a fraction f, so that p(z) = Θ
+(
+|z|− γ
+)exp(−z2/2)√
+2πf , where γ =
+H−1
+(
+1−f
+2
+)
+I(α) = 2α
+f
+∫
+Dt
+[
+H
+(√
+R
+1− R t
+)
+− H
+(γ +
+√
+Rt√
+1− R
+)]
+log H
+(√
+R
+1− R t
+)]
+(76)
+25
+I(α) is plotted for varying values of f in Fig. 1F. Notice that for f→ 1, γ→∞ and we recover Eq.
+72. To obtain the optimal pruning fraction fopt for any α, we ﬁrst need an equation forR, which can
+be obtained by taking the saddle point of Eq. 73. Next we optimize I(α) by setting the derivative
+of Eq. 76 with respect to f equal to zero. This gives us a pair of equations which can be solved
+numerically to obtain fopt for any α.
+Finally, Eq. 76 reveals that as we prune more aggressively the information gain per example
+approaches a ﬁnite rate. As f→ 0, γ→ 0, and we obtain,
+I(α) =−
+∫
+Dt log H(
+√
+Rt) (77)
+Which allows us to produce to trace the Pareto frontier in Fig. 1 F. For R→ 1, Eq. 77 gives the
+asymptotic information gain I(∞) = 1 nat/example.
+A.7 Imperfect teacher-probe overlap
+In realistic settings we expect the probe student to have only partial information about the target
+function. What happens if the probe student does not perfectly match the teacher? To understand this
+carefully, we need to compute the full set of saddle point equations over R, q, and ρ, which we will
+do in the following section. But to ﬁrst get an idea for what goes wrong, we include in this section a
+simple sketch which reveals the limiting behavior.
+Consider the case where the angle between the probe student and teacher is θ. Rotate coordinates so
+that the ﬁrst canonical basis vector aligns with the studentJ = (1, 0, . . . ,0), and the teacher lies in
+the span of the ﬁrst two canonical basis vectors, T = (cos θ, sin θ, 0, . . . ,0). Consider the margin
+along the teacher of a new training example x drawn from the pruned distribution.
+E|T· x|2 = E[x2
+0 cos2 θ + x2
+1 sin2 θ] (78)
+As the fraction of examples kept goes to zero, Ex2
+0→ 0, and the average margin of a new example
+converges to a ﬁxed value,
+E|T· x|2 = sin2 θ (79)
+Hence the data ultimately stops concentrating around the teacher’s decision boundary, and the
+information gained from each new example goes to zero. Therefore we expect the generalization
+error to converge to a power law, where the constant prefactor is roughly that of pruning with a prune
+fraction fmin which yields an average margin of 1− R2. This “minimum” pruning fraction lower
+bounds the generalization error envelope (see Fig. 2), and satisﬁes the following equation,
+∫ γmin
+−γmin
+dxp(x)x2 = 1
+2− e−γ2
+min/2γmin√
+2π(1− 2H(γmin)) = 1− R2 (80)
+where γmin = H−1
+(
+1−fmin
+2
+)
+. Eq. 80 can be solved numerically, and we use it to produce the
+lower-bounding power laws shown in red in Fig. 2C,D. The minimum achievable pruning fraction
+fmin(θ) approaches zero as the angle between the probe student and the teacher shrinks, and we can
+obtain its scaling by taking R→ 1, in which case we ﬁnd,
+fmin(θ)∼ θ (81)
+A.8 Optimal pruning policy
+The saddle point equations Eq. 66,67 reveal that the optimal pruning policy varies as a function of
+αprune. For αprune large the best policy is to retain only the “hardest" (smallest-margin) examples. But
+when αprune is small, keeping the “hardest" examples performs worse than chance, suggesting that the
+best policy in the αprune small regime is to keep the easiest examples. Indeed by switching between
+26
+the “keep easy” and “keep hard” strategies as αprune grows, one can achieve a lower Pareto frontier
+than the one shown in Fig. 1A in the small αprune regime (Fig. 7C).
+Optimal data distributionA
+Optimal pruning window
+Keep easy
+Optimal
+policy
+Pareto
+frontier
+B
+C
+Test error (%)
+Figure 7: Optimal pruning policy as a function of αprune. A, The Pareto frontier in Fig. AA can be
+lowered in the small αprune regime if one adaptively switches pruning policies from a “keep easy”
+to a “keep hard” policy. The dashed purple line indicates the “keep easy” frontier (computed using
+numerical simulations). The optimal pruning window (derived below) interpolates between the two
+policies, achieving the lowest possible Pareto frontier (cartooned in blue). B, The optimal data
+distribution along the teacher p(z|αprune, f) is a delta function, which selects easy examples for small
+αprune, intermediate examples for intermediate αprune, and hard examples for large αprune. C, The
+optimal pruning window similarly selects easy examples for small αprune, intermediate examples for
+intermediate αprune, and hard examples for large αprune
+These observations beg the question: what is the best policy in the intermediate αprune regime? Is
+there a globally optimal pruning policy which interpolates between the “keep easy” and “keep hard”
+strategies and achieves the lowest possible Pareto frontier (blue curve in Fig. 7A)?
+In this section we investigate this question. Using the calculus of variations, we ﬁrst derive the
+optimal data distribution p(z|αprune, f) along the teacher for a given αprune, f. We begin by framing
+the problem using the method of Lagrange multipliers. Seeking to optimize R under the constraints
+imposed by the saddle point equations Eqs. 66,67, we deﬁne the Lagrangian,
+L = R + µ
+(
+R− 2α
+∫ ∞
+0
+dz p(z)ϕ(z; R, k)
+)
++ λ
+(
+1− R2− 2α
+∫ ∞
+0
+dz p(z)ψ(z; R, k)
+)
+. (82)
+Where,
+ϕ(z; R, k) =
+∫ κ
+−∞
+dt√
+2π
+√
+1− R2 exp
+(
+− (t− Rz)2
+2(1− R2)
+)(z− Rt
+1− R2
+)
+(κ− t), (83)
+and,
+ψ(z; R, k) =
+∫ κ
+−∞
+dt√
+2π
+√
+1− R2 exp
+(
+− (t− Rz)2
+2(1− R2)
+)(
+κ− t
+)2
+(84)
+Taking a variational derivativeδL
+δp with respect to the data distribution p, we obtain an equation for
+z, indicating that the optimal distribution is a delta function at z = z∗. To ﬁnd the optimal location
+of the delta function z∗, we take derivatives with respect to the remaining variables R, k, µ, λ and
+solve the resulting set of equations numerically. The qualitative behavior is shown in Fig. 7A. As
+αprune grows, the location of the delta function shifts from inﬁnity to zero, conﬁrming that the optimal
+strategy for small αprune is to keep the "easy" (large-margin) examples, and for large αprune to keep
+the "hard" (small-margin) examples.
+Interestingly, this calculation also reveals that if the location of the delta function is chosen optimally,
+the student can perfectly recover the teacher (R = 1, zero generalization error) for any αprune. This
+27
+observation, while interesting, is of no practical consequence because it relies on an inﬁnitely large
+training set from which examples can be precisely selected to perfectly recover the teacher. Therefore,
+to derive the optimal pruning policy for a more realistic scenario, we assume a gaussian distribution
+of data along the teacher direction and model pruning as keeping only those examples which fall
+inside a window a < z < b . The saddle point equations, Eqs. 66,67, then take the form,
+R = 2α
+f
+√
+π/2
+√
+1− R2
+∫ κ
+−∞
+Dt
+[
+exp
+(
+− (a− Rt)2
+2(1− R2)
+)
+− exp
+(
+− (b− Rt)2
+2(1− R2)
+)]
+(κ− t) (85)
+1− R2 = 4α
+f
+∫ κ
+−∞
+Dt
+[
+H
+( a− Rt√
+1− R2
+)
+− H
+( b− Rt√
+1− R2
+)]
+(κ− t)2 (86)
+Where a must satisfy a = H−1(f /2 + H(b)). For each f, α, we ﬁnd the optimal location of this
+window using the method of Lagrange multipliers. Deﬁning the Lagrangian as before,
+L = R + µ
+(
+R− 2α
+∫ ∞
+0
+dz p(z)ϕ(z; R, k)
+)
++ λ
+(
+1− R2− 2α
+∫ ∞
+0
+dz p(z)ψ(z; R, k)
+)
+, (87)
+Where now,
+φ(b; R, k) =
+[
+exp
+(
+− (a− Rt)2
+2(1− R2)
+)
+− exp
+(
+− (b− Rt)2
+2(1− R2)
+)]
+(κ− t) (88)
+ψ(b; R, k) =
+[
+H
+( a− Rt√
+1− R2
+)
+− H
+( b− Rt√
+1− R2
+)]
+(κ− t)2 (89)
+To ﬁnd the optimal location of the pruning window, we take derivatives with respect to the remaining
+variables b, R, k, µ, λ and solve the resulting set of equations numerically. Consistent with the results
+for the optimal distribution, the location of the optimal window shifts from around inﬁnity to around
+zero as αprune grows (Fig. 7C).
+A.9 Exact saddle point equations
+To obtain exact expressions for the generalization error for all θ, we can extremize Eq. 63 wrt R, q, ρ.
+Derivative wrt R
+R− ρ cos θ
+(1− q) sin2 θ =
+∫
+dt
+∫
+dz p(z)
+√
+2α
+π
+( t
+√
+q− ρ2
+√
+2
+√
+(ρ2− q)Λ
+− (R− ρ cos θ)Γ(t, z)√
+2
+√
+q− ρ2Λ3
+)
+(90)
+× log
+(
+H
+(
+κ− t
+√
+q− ρ2− ρz√1− q
+))
+exp
+(
+− Γ(t, z)2
+2 (q− ρ2) Λ2− t2
+2
+)
+(91)
+Where we have deﬁned,
+Λ =
+√
+q sin2 θ− R2− ρ2 + 2Rρ cos θ, (92)
+Γ(t, z) = (R− ρ cos θ)
+(
+t
+√
+q− ρ2 + ρz
+)
++ qz cos θ− ρRz. (93)
+Integrating the right-hand side by parts,
+R− ρ cos θ
+(1− q) sin2 θ =−
+∫
+dt
+∫
+dz p(z) α
+πΛ
+√
+q− ρ2e−(κ−t
+√
+q−ρ2 −ρz)
+2
+2(1−q)
+√
+2π√1− qH
+(
+κ−t
+√
+q−ρ2−ρz√1−q
+) exp
+(
+−∆(t, z)
+2Λ2
+)
+(94)
+28
+where
+∆(t, z) = 2tz
+√
+q− ρ2(R−ρ cos θ) cosθ+qt2 sin2 θ+qz2 cos2 θ−ρ2t2 sin2 θ−ρ2z2 cos2 θ (95)
+Changing variables to t→ t
+√
+q− ρ2 + ρz and taking the limit q→ 1,
+R− ρ cos θ
+sin2 θ =
+⟨ ∫ κ
+−∞
+dt α
+πΛ exp
+(
+−∆(t, z)
+2Λ2
+)
+(κ− t)
+⟩
+z
+(96)
+Where with this change of variables,
+Λ =
+√
+q sin2 θ− R2− ρ2 + 2ρR cos θ (97)
+∆(t, z) = z2 (
+ρ2 + cos2 θ− 2ρR cos θ
+)
++ 2tz(R cos θ− ρ) + t2 sin2 θ (98)
+Derivative wrt q,
+q− (ρ2 + R2− 2ρR cos θ)/ sin2 θ
+2(1− q)2 =
+∫
+dt
+∫
+dz p(z)2α
+π
+(
+κ− t
+√
+q− ρ2− ρz
+(1− q)3/2 − t√1− q
+√
+q− ρ2
+)
+(99)
+× exp
+
+−
+(
+κ− t
+√
+q− ρ2− ρz
+)2
+2(1− q) − t2
+2
+
+ (100)
+×H
+
+−
+(R− ρ cos θ)
+(
+t
+√
+q− ρ2 + ρz
+)
++ qz cos θ− ρRz
+√
+(ρ2− q)
+(
+ρ2− q sin2 θ + R2− 2ρR cos θ
+)
+
+ H
+(
+κ− t
+√
+q− ρ2− ρz√1− q
+)
+(101)
+−
+√
+2α
+π
+(t(R−ρ cosθ)
+2
+√
+q−ρ2 + z cos
+√
+2
+√
+(q− ρ2)Λ
+−
+((
+q− ρ2)
+sin2 θ + Λ2)
+Γ(t, z)
+2
+√
+2 (ρ2− q)3/2 Λ3
+)
+(102)
+× log
+(
+H
+(
+κ− t
+√
+q− ρ2− ρz√1− q
+))
+exp
+
+−
+(
+(R− ρ cos θ)
+(
+t
+√
+q− ρ2 + ρz
+)
++ qz cos θ− ρRz
+)2
+2 (q− ρ2) Λ2 − t2
+2
+
+
+(103)
+Where Γ(t, z) = (R− ρ cos θ)
+(
+t
+√
+q− ρ2 + ρz
+)
++ qz cos θ− ρRz. After integating by parts,
+q− (ρ2 + R2− 2ρR cos θ)/ sin2 θ
+2(1− q)2 =
+∫
+dt
+∫
+dz p(z)
+α exp
+(
+−
+2t
+√
+q−ρ2(ρz−κ)−(ρ2−1)t2+(κ−ρz)2
+2(1−q)
+)
+4πH
+(
+κ−t
+√
+q−ρ2−ρz√1−q
+)2
+(104)
+×
+√
+2
+π e−(κ−t
+√
+q−ρ2 −ρz)
+2
+2(1−q) H
+(
+− Γ(t, z)√
+(q− ρ2) Λ
+)
+(105)
+29
+Changing variables to t→ t
+√
+q− ρ2 + ρz and taking the limit q→ 1,
+1− ρ2 + R2− 2ρR cos θ
+sin2 θ = 2α
+⟨ ∫ κ
+−∞
+dt e
+− (t−ρz)2
+2(1−ρ2 )
+√
+2π
+√
+1− ρ2 H
+( Γ(t, z)√
+1− ρ2Λ
+)
+(κ− t)2
+⟩
+z
+(106)
+Where now Γ(t, z) = z(ρR− cos θ)− t(R− ρ cos θ).
+Derivative wrt ρ,
+ρ− R cos θ
+(1− q) sin2 θ = α
+2π
+(
+ρt√
+q−ρ2− z
+)
+exp
+(
+−
+(
+κ−t
+√
+q−ρ2−ρz
+)2
+2(1−q) − t2
+2
+)
+H
+(
+− Γ(t,z)√
+q−ρ2Λ
+)
+√1− qH
+(
+κ−t
+√
+q−ρ2−ρz√1−q
+) (107)
++
+√
+2α
+π
+((R− ρ cos θ)
+(
+z− ρt√
+q−ρ2
+)
+−
+(
+t
+√
+q− ρ2 + ρz
+)
+cos θ− Rz
+√
+2
+√
+q− ρ2Λ
+(108)
+−
+(
+−2ρΛ2−
+(
+q− ρ2)
+(2ρ− 2R cos θ)
+)
+Γ(t, z)
+2
+√
+2 (q− ρ2)3/2 Λ3
+)
+(109)
+× log
+(
+1
+2erfc
+(
+κ− t
+√
+q− ρ2− ρz√
+2√1− q
+))
+exp
+(
+− Γ(t, z)2
+2 (q− ρ2) Λ2− t2
+2
+)
+(110)
+Integrating the second term by parts,
+ρ− R cos θ
+(1− q) sin2 θ = α
+π
+(
+ρt√
+q−ρ2− z
+)
+exp
+(
+−
+(
+κ−t
+√
+q−ρ2−ρz
+)2
+2(1−q) − t2
+2
+)
+H
+(
+− Γ(t,z)√
+q−ρ2Λ
+)
+√1− qH
+(
+κ−t
+√
+q−ρ2−ρz√1−q
+) (111)
+− α
+π∆ exp
+(
+−∆(t, z)
+2Λ2
+) (ρR− q cos θ
+q− ρ2
+)
+(112)
+Changing variables to t→ t
+√
+q− ρ2 + ρz and taking the limit q→ 1,
+ρ− R cos θ
+sin2 θ = 2α
+⟨ ∫ κ
+−∞
+dt e
+− (t−ρz)2
+2(1−ρ2 )
+√
+2π
+√
+1− ρ2 H
+( Γ(t, z)√
+1− ρ2Λ
+)(z− ρt
+1− ρ2
+)
+(κ− t) (113)
++ 1
+2πΛ exp
+(
+−∆(t, z)
+2Λ2
+) (ρR− cos θ
+1− ρ2
+)
+(κ− t)
+⟩
+z
+(114)
+So together we have three saddle point equations:
+30
+R− ρ cos θ
+sin2 θ = α
+πΛ
+⟨ ∫ κ
+−∞
+dt exp
+(
+−∆(t, z)
+2Λ2
+)
+(κ− t)
+⟩
+z
+(115)
+1− ρ2 + R2− 2ρR cos θ
+sin2 θ = 2α
+⟨ ∫ κ
+−∞
+dt e
+− (t−ρz)2
+2(1−ρ2 )
+√
+2π
+√
+1− ρ2 H
+( Γ(t, z)√
+1− ρ2Λ
+)
+(κ− t)2
+⟩
+z
+(116)
+ρ− R cos θ
+sin2 θ = 2α
+⟨ ∫ κ
+−∞
+dt e
+− (t−ρz)2
+2(1−ρ2 )
+√
+2π
+√
+1− ρ2 H
+( Γ(t, z)√
+1− ρ2Λ
+)(z− ρt
+1− ρ2
+)
+(κ− t)
+(117)
++ 1
+2πΛ exp
+(
+−∆(t, z)
+2Λ2
+) (ρR− cos θ
+1− ρ2
+)
+(κ− t)
+⟩
+z
+(118)
+Where
+Λ =
+√
+sin2 θ− R2− ρ2 + 2ρR cos θ, (119)
+Γ(t, z) = z(ρR− cos θ)− t(R− ρ cos θ), (120)
+∆(t, z) = z2 (
+ρ2 + cos2 θ− 2ρR cos θ
+)
++ 2tz(R cos θ− ρ) + t2 sin2 θ. (121)
+Solving these equations numerically yields an excellent ﬁt to numerical simulations on structured
+data (Fig. 2BCD).
+B Model training method details & dataset information
+Perceptron in the teacher-student setting All code to reproduce these simulations can be found at:
+https://colab.research.google.com/drive/1in35C6jh7y_ynwuWLBmGOWAgmUgpl8dF?
+usp=sharing. Perceptrons were trained on a synthetic dataset of P examples{xµ, yµ}µ=1,...,P ,
+where xµ∼N (0, IN) are i.i.d. zero mean unit variance random Gaussian inputs, andyµ = sign(T·x)
+are labels generated by a teacher perceptron T∈ RN , which was randomly drawn from a uniform
+distribution on the sphere T∼ Unif(SN−1(
+√
+N)). For all of our experiments we ﬁxedN = 200 and
+set P = αN where α varied between 100.1 and 100.5. Each synthetic dataset was pruned to keep a
+fraction f of the smallest-margin examples, where f varied between 0.1 and 1 in Fig. 1 and between
+0.2 and 1 in Figs. 2,3 to match the real-world experiments in Fig. 3. Perceptrons were optimized to
+ﬁnd the max-margin separating solution using a standard quadratic programming (QP) algorithm
+from the CVXPY library (for analysis of the computational complexity of this algorithm see Fig. 8).
+Results were averaged over 100 independent draws of the teacher and training examples.
+ImageNet. ImageNet model training was performed using a standard ResNet-50 through the VISSL
+library [41] (stable version v0.1.6), which provides default conﬁguration ﬁles for supervised ResNet-
+50 training (accessible here; released under the MIT license). Each model was trained on a single
+node of 8 NVIDIA V100 32GB graphics cards with BATCHSIZE_PER_REPLICA = 256, using the
+Stochastic Gradient Descent (SGD) optimizer with a base learning rate = 0.1, nesterov momentum
+= 0.9, and weight decay = 0.001. For our scaling experiments (Fig. 3 and Fig. 9), we trained one
+model per fraction of data kept (0.1-1.0) for each dataset size. In total, these plot required training 97
+models on (potentially a subset of) ImageNet. All the models were trained with matched number of
+iterations, corresponding to 105 epochs on the full ImageNet dataset. The learning rate was decayed
+by a factor of 10 after the number of iterations corresponding to 30, 60, 90, and 100 epochs on the
+full ImageNet dataset.
+For our main ImageNet experiments (Fig. 5) we trained one model per fraction of data kept (1.0,
+0.9, 0.8, 0.7, 0.6) × metric (11 metrics in total). In the plot itself, since any variation in the
+“fraction of data kept = 1.0” setting is due to random variation across runs not due to potential
+metric differences, we averaged model performances to obtain a single datapoint here (while also
+keeping track of the variation across models, which is plotted as ±2 standard deviations). In
+total, this plot required training 55 models on (potentially a subset of) ImageNet. For Fig. 5C, in
+order to reduce noise from random variation, we additionally trained ﬁve models per datapoint and
+metric, and plot the averaged performance in addition to error bars showing one standard deviation
+31
+of the mean. Numerical results from Figure 5BC are available from Table 1. ImageNet [ 42] is
+released under the ImageNet terms of access. It is important to note that ImageNet images are
+often biased [43, 44]. The SWaV model used to compute our prototypicality metrics was obtained
+via torch.hub.load(‘facebookresearch/swav:main’, ‘resnet50’) , which is the original
+model provided by [36]; we then used the avgpool layer’s activations.
+Fraction of data kept
+metric 0.9 0.8 0.7 0.6
+random 89.816 89.882 89.108 88.206
+memorization 90.209 90.664 89.837 89.032
+supervised prototypes 90.076 90.528 89.358 88.925
+self-supervised prototypes 90.245 90.466 89.46 88.547
+DDD 89.428 89.060 88.682 88.484
+EL2N (1 model) 90.534 90.310 89.818 88.476
+EL2N (20 models) 90.348 89.698 90.352 88.674
+active learning 90.354 90.314 89.334 89.360
+forgetting 90.352 90.120 89.486 89.112
+inﬂuence max 90.590 89.804 88.684 88.062
+inﬂuence sum-abs 89.558 90.224 88.618 88.082
+Table 1: Benchmark table of pruning results (top-5 ImageNet validation accuracy) corresponding to
+Figure 5BC. Values for ResNet-50 trained with VISSL (baseline unpruned top-5 accuracy: 90.848).
+CIFAR-10 and SVHN. CIFAR-10 and SVHN model training was performed using a standard
+ResNet-18 through the PyTorch library. Each model was trained on a single NVIDIA TITAN Xp
+12GB graphics card with batch size = 128, using the Stochastic Gradient Descent (SGD) optimizer
+with learning rate = 0.1, nesterov momentum = 0.9, and weight decay = 0.0005. Probe models were
+trained for 20 epochs each for CIFAR-10 and 40 epochs each for SVHN. Pruning scores were then
+computed using the EL2Ns metric [10], averaged across 10 independent initializations of the probe
+models. To evaluate data pruning performance, fresh models were trained from scratch on each
+pruned dataset for 200 epochs, with the learning rate decayed by a factor of 5 after 60, 120 and 160
+epochs.
+Data pruning for transfer learning. To assess the effect of pruning downstream ﬁnetuning data
+on transfer learning performance, vision transformers (ViTs) pre-trained on ImageNet21k were
+ﬁne-tuned on different pruned subsets of CIFAR-10. Pre-trained models were obtained from the
+timm model library [45]. Each model was trained on a single NVIDIA TITAN Xp 12GB graphics
+card with batch size = 128, using the Adam optimizer with learning rate = 1e-5 and no weight decay.
+Probe models were trained for 2 epochs each. Pruning scores were then computed using the EL2Ns
+metric [10], averaged across 10 independent random seeds. To evaluate data pruning performance,
+pre-trained models were ﬁne-tuned on each pruned dataset for 10 epochs.
+To assess the effect of pruning upstream pretraining data on transfer learning performance, each
+of the ResNet-50s pre-trained on pruned subsets of ImageNet1k in Fig. 3 D was ﬁne-tuned on all
+of CIFAR-10. Each model was trained on a single NVIDIA TITAN Xp 12GB graphics card with
+batch size = 128, using the RMSProp optimizer with learning rate = 1e-4 and no weight decay.
+Probe models were trained for 2 epochs each. Pruning scores were then computed using the EL2Ns
+metric [10], averaged across 10 independent random seeds. To evaluate data pruning performance,
+pre-trained models were ﬁne-tuned on each pruned dataset for 10 epochs.
+C Breaking compute scaling laws via data pruning
+Do the savings in training dataset size we have identiﬁed translate to savings in compute, and can
+data pruning be used to beat widely observed compute scaling laws [2, 5, 7]? Here we show for the
+perceptron that data pruning can afford exponential savings in compute, and we provide preliminary
+evidence that the same is true for ResNets trained on CIFAR-10 and ImageNet. We repeat the
+perceptron learning experiments in Fig. 1A, keeping track of the computational complexity of each
+experiment, measured by the time to convergence of the quadratic programming algorithm used to
+32
+ResNet18 on CIFAR-10
+Perceptron in teacher-student setting
+ResNet50 on Imagenet
+A B
+ED
+100%
+Frac. data kept
+77%
+60%
+46%
+36%
+28%
+22%
+17%
+13%
+10%
+Test error (%)
+Test error (%)
+Test error (top-5 %)
+Epoch Epoch
+Compute (FLOPs)Compute (clock time in seconds)
+ResNet18 on CIFAR-10
+Pareto
+frontier
+20%
+Frac. data kept
+30%
+40%
+50%
+60%
+70%
+80%
+90%
+100%
+Test error (%)
+Compute (FLOPs)
+C ResNet50 on ImageNet
+Pareto
+frontier
+20%
+Frac. data kept
+30%
+40%
+50%
+60%
+70%
+80%
+90%
+100%
+Theory
+Simulation
+Figure 8: Breaking compute scaling laws via data pruning. A,B,C, We repeat the experiments in
+Figs. 1 A, 3C,D, replacing the x-axis with compute, measured as clock time to convergence for
+the perceptron (A), and FLOPs in a ﬁxed-epoch training setting for the ResNets (B,C). Theoretical
+curves in A are overlaid by linearly regressing clock time to convergence T from αprune, with
+T = 0.96αprune + 0.80. Perceptrons in A are trained on a CPU on a google Colab. E,D, CIFAR-10
+and ImageNet learning curves for ﬁxed epochs.
+ﬁnd a max-margin solution (see B for details). Across all experiments, the convergence timeT was
+linearly proportional to αprune with T = 0.96αprune + 0.80, allowing us to replace the x-axis of 1A
+with compute to produce Fig. 8A, which reveals that data pruning can be used to break compute
+scaling laws for the perceptron.
+Motivated by this, we next investigate whether the convergence time of neural networks trained
+on pruned datasets depends largely on the number of examples and not their difﬁculty, potentially
+allowing for exponential compute savings. We investigate the learning curves of a ResNet18 trained
+on CIFAR-10 and a ResNet50 on ImageNet for several different pruning fractions (Fig. 8B). While
+previous works have ﬁxed the number of iterations [10], here we ﬁx the number ofepochs, so that the
+model trained on 60% of the full dataset is trained for only 60% the iterations of the model trained
+on the full dataset, using only 60% the compute. Nevertheless, we ﬁnd that the learning curves are
+strikingly similar across pruning fractions, and appear to converge equally quickly. These results
+suggest that data pruning could lead to large compute savings in practical settings, and in ongoing
+experiments we are working to make the analogs of Fig. 8A for ResNets on CIFAR-10 and ImageNet
+to quantify this beneﬁt.
+D Additional scaling experiments
+In Fig. 9 we perform additional scaling experiments using the EL2Ns and self-supervised prototypes
+metrics. In Fig. 10 we give a practical example of a cross over from exponential to power-law scaling
+when the probe student has limited information about the teacher (here a model trained for only a
+small number of epochs on SVHN) .
+E Extremal images according to different metrics
+In Fig. 6, we showed extremal images for two metrics (self-supervised prototypes, memorization) and
+a single class. In order to gain a better understanding of how extremal images (i.e. images that are
+33
+Pareto
+frontier
+Pareto
+frontier Pareto
+frontier
+Self-supervised prototypes
+(50% class balancing)EL2Ns (50% class balancing)EL2Ns (0% class balancing)
+Top-5 test error (%)
+Top-5 test error (%)
+Top-5 test error (%)
+A B C
+100%
+Frac. data kept
+77%
+60%
+46%
+36%
+28%
+22%
+17%
+13%
+10%
+100%
+Frac. data kept
+77%
+60%
+46%
+36%
+28%
+22%
+17%
+13%
+10%
+100%
+Frac. data kept
+77%
+60%
+46%
+36%
+28%
+22%
+17%
+13%
+10%
+Figure 9: Additional scaling experiments. We reproduce the scaling results on ImageNet in Fig. 3D
+using three additional metrics: two supervised and one self-supervised. Each shows some signatures of
+breaking power law scaling, although the effect is less dramatic than for the best metric, memorization
+(Fig. 3D). (A) EL2Ns with a class balancing fraction of 0% (see App. Section H for details), ( B)
+EL2Ns with a class balancing fraction of 50%, and ( C) Self-supervised prototypes with a class
+balancing fraction of 50%.
+SVHN (epoch 40)A B
+Error no longer 
+lower-bounded 
+Error lower-bounded
+by power law at 
+SVHN (epoch 4)
+Figure 10: Consistent with a prediction from the perceptron theory (Fig. 2), when SVHN is pruned
+using a weak metric (a probe trained for only 4 epochs), the learning curve envelope is lower-bounded
+by a power law at some fmin (A). However, with a stronger pruning metric (a probe trained for 40
+epochs), the learning curve can break through this power law to achieve lower generalization error
+(B).
+easiest or hardest to learn according to different metrics) look like for all metrics and more classes,
+we here provide additional ﬁgures. In order to avoid cherry-picking classes while at the same time
+making sure that we are visualizing images for very different classes, we here show extreme images
+for classes 100, ..., 500 while leaving out classes 0 and 400 (which would have been part of the
+visualization) since those classes almost exclusively consist of images containing people (0: tench,
+400: academic gown). The extremal images are shown in Figures 12,13,14,15,16,17,18,19.
+34
+Test error (%)
+Teacher-student perceptron
+Training examples
+ResNet18 on SVHNBA
+Figure 11: Scaling of the Pareto frontier. (A) Different functional forms ﬁtted to the Pareto frontier of
+the teacher-student perceptron using least squares: power-law (blue), exponential (orange), factorial
+(red), and iterated factorial (purple). (B), We estimate the empirical Pareto frontier (red) for ResNet18
+on SVHN at higher resolution by training an additional 300 models in the region around the frontier.
+We then ﬁt two functional forms to the empirical frontier using least squares: power-law (dark red)
+and exponential (pink). The exponential shows a much better ﬁt to the empirical Pareto frontier,
+indicating that the scaling is at least exponential.
+35
+easy
+hard
+random
+easy
+hard
+influence max
+easy
+hard
+influence sum-abs
+easy
+hard
+self-supervised prototypes
+easy
+hard
+supervised prototypes
+easy
+hard
+EL2N (1 model)
+Figure 12: Extreme images according to different metrics for ImageNet class 100 ( black swan ).
+For each metric, the top row shows images that are ranked as “easy” (most pruneable) according to
+the metric, and the bottom row shows images that are ranked as “hard” (least pruneable).
+36
+easy
+hard
+DDD
+easy
+hard
+EL2N (20 models)
+easy
+hard
+memorization
+easy
+hard
+active learning
+easy
+hard
+forgetting
+Figure 13: Extreme images according to different metrics for ImageNet class 100 ( black swan ).
+For each metric, the top row shows images that are ranked as “easy” (most pruneable) according to
+the metric, and the bottom row shows images that are ranked as “hard” (least pruneable).
+37
+easy
+hard
+random
+easy
+hard
+influence max
+easy
+hard
+influence sum-abs
+easy
+hard
+self-supervised prototypes
+easy
+hard
+supervised prototypes
+easy
+hard
+EL2N (1 model)
+Figure 14: Extreme images according to different metrics for ImageNet class 200 ( Tibetan
+terrier). For each metric, the top row shows images that are ranked as “easy” (most prune-
+able) according to the metric, and the bottom row shows images that are ranked as “hard” (least
+pruneable).
+38
+easy
+hard
+DDD
+easy
+hard
+EL2N (20 models)
+easy
+hard
+memorization
+easy
+hard
+active learning
+easy
+hard
+forgetting
+Figure 15: Extreme images according to different metrics for ImageNet class 200 ( Tibetan
+terrier). For each metric, the top row shows images that are ranked as “easy” (most prune-
+able) according to the metric, and the bottom row shows images that are ranked as “hard” (least
+pruneable).
+39
+easy
+hard
+random
+easy
+hard
+influence max
+easy
+hard
+influence sum-abs
+easy
+hard
+self-supervised prototypes
+easy
+hard
+supervised prototypes
+easy
+hard
+EL2N (1 model)
+Figure 16: Extreme images according to different metrics for ImageNet class 300 (tiger beetle ).
+For each metric, the top row shows images that are ranked as “easy” (most pruneable) according to
+the metric, and the bottom row shows images that are ranked as “hard” (least pruneable).
+40
+easy
+hard
+DDD
+easy
+hard
+EL2N (20 models)
+easy
+hard
+memorization
+easy
+hard
+active learning
+easy
+hard
+forgetting
+Figure 17: Extreme images according to different metrics for ImageNet class 300 (tiger beetle ).
+For each metric, the top row shows images that are ranked as “easy” (most pruneable) according to
+the metric, and the bottom row shows images that are ranked as “hard” (least pruneable).
+41
+easy
+hard
+random
+easy
+hard
+influence max
+easy
+hard
+influence sum-abs
+easy
+hard
+self-supervised prototypes
+easy
+hard
+supervised prototypes
+easy
+hard
+EL2N (1 model)
+Figure 18: Extreme images according to different metrics for ImageNet class 500 (cliff dwelling ).
+For each metric, the top row shows images that are ranked as “easy” (most pruneable) according to
+the metric, and the bottom row shows images that are ranked as “hard” (least pruneable).
+42
+easy
+hard
+DDD
+easy
+hard
+EL2N (20 models)
+easy
+hard
+memorization
+easy
+hard
+active learning
+easy
+hard
+forgetting
+Figure 19: Extreme images according to different metrics for ImageNet class 500 (cliff dwelling ).
+For each metric, the top row shows images that are ranked as “easy” (most pruneable) according to
+the metric, and the bottom row shows images that are ranked as “hard” (least pruneable).
+43
+F Impact of number of clusters k on self-supervised prototypes
+Our self-supervised prototype metric is based on k-means clustering, which has a single hyperparam-
+eter k. By default and throughout the main paper, we set k = 1000, corresponding to the number of
+classes in ImageNet. Here, we investigate other settings of k to understand how this hyperparameter
+impacts performance. As can be seen in Table 2, k does indeed have an impact on performance, and
+very small values for k (e.g. k < 10) as well as very large values for k (e.g. k = 50, 000) both lead
+to performance impairments. At the same time, performance is relatively high across very different
+in-between settings for k. In order to assess these results, it may be important to keep in mind that
+±0.54% corresponds to plus/minus 2 standard deviations of performance when simply training the
+same model multiple times (with different random initialization). Overall, these results suggest that if
+the number of clusters k deviates at most by one order of magnitude from the number of classes in
+the dataset (for ImageNet-1K), the exact choice of k does not matter much.
+k 1 5 10 50 100 200 400 600 800 1K 5K 10K 50K
+acc 88.35 89.09 88.76 89.04 89.48 90.27 89.85 89.96 90.44 90.56 90.33 90.57 88.67
+Table 2: Performance (top-5 accuracy, denoted as acc) when pruning away 20% of ImageNet
+according to our self-supervised prototype metric as a function of the number of prototypes k
+(hyperparameter used for self-supervised clustering indicating the number of clusters). Results based
+on training a ResNet-50 architecture with VISSL without class balancing.
+G Impact of ensemble prototypes
+The self-supervised prototypes metric is based onk-means clustering in the embedding space of a self-
+supervised (=SSL) model. Since even otherwise identical models trained with different random seeds
+can end up with somewhat different embedding spaces, we here investigated how the performance
+of our self-supervised prototypes metric would change when averaging the scores derived from ﬁve
+models, instead of just using a single model’s score. The results, shown in Table 3, indicate that
+ensembling the self-supervised prototype scores neither improves nor hurts performance. This is
+both good and bad news: Bad news since naturally any improvement in metric development leads
+to better data efﬁciency; on the other hand this is also good news since ensembles increase the
+computational cost of deriving the metric—and this suggests that ensembling is not necessary to
+achieve the performance we achieved (unlike in other methods such as ensemble active learning).
+Fraction of data kept 0.9 0.8 0.7
+score from single model 90.03 90.10 89.38
+score from ensemble model 89.93 90.40 89.38
+Table 3: Performance (top-5 acuracy) when pruning away 10%, 20% or 30% of ImageNet based
+on the self-supervised prototype metric derived from either a single SSL model, or an ensemble of
+SSL models. Supervised model training on the pruned dataset was performed with a ResNet-50
+architecture trained using VISSL without class balancing. Overall, we do not observe any performance
+difference between the two settings: the differences are still well within a single standard deviation of
+training multiple models with identical settings. In order to reduce the inﬂuence of random variations,
+each data point in this table shows the average of four independent runs.
+H Relationship between pruning and class (im-)balance
+Motivation. It is well-known that strong class imbalance in a dataset is a challenge that needs to
+be addressed. In order to understand the effect of pruning on class (im-)balance, we quantiﬁed this
+relationship. For context, if pruning according to a certain metric preferentially leads to discarding
+most (or even all) images from certain classes, it is likely that the performance on those classes will
+drop as a result if this imbalance is not addressed.
+44
+Class imbalance metric: pruning ampliﬁes class imbalance. Since a standard measure of class
+(im-)balance—dividing the number of images for the majority class by the number of images for the
+minority class—is highly sensitive to outliers and discards information about the 998 non-extreme
+ImageNet classes, we instead calculated a class balance score b∈ [0%, 100%] as the average class
+imbalance across any two pairs of classes by computing the expectation over taking two random
+classes, and then computing how many images the minority class has in proportion to the majority
+class. For instance, a class balance score of 90% means that on average, when selecting two random
+classes from the dataset, the smaller of those two classes contains 90% of the number of images of
+the larger class (higher=better; 100% would be perfectly balanced).
+In Fig. 20, we observe that dataset pruning strongly increases class imbalance. This is the case both
+when pruning away easy images and when pruning away hard images, and the effect occurs for
+all pruning metrics except, of course, for random pruning. Class imbalance is well-known to be a
+challenge for deep learning models when not addressed properly [46]. The cause for the ampliﬁed
+class imbalance is revealed when looking at class-conditional differences of metric scores (Figs. 22
+and 23): The histograms of the class-conditional score distributions show that for many classes, most
+(if not all) images have very low scores, while for others most (if not all) images have very high
+scores. This means that as soon as the lowest / highest scoring images are pruned, certain classes are
+pruned preferentially and thus class imbalance worsens.
+We thus use 50% class balancing for our ImageNet experiments. This ensures that every class has at
+least 50% of the images that it would have when pruning all classes equally (essentially providing
+a ﬁxed ﬂoor for the minimum number of images per class). This simple ﬁx is an important step to
+address and counteract class imbalance, although other means could be used as well; and ultimately
+one would likely want to use a self-supervised version of class (or cluster) balancing when it comes
+to pruning large-scale unlabeled datasets. For comparison purposes, the results for ImageNet pruning
+without class balancing are shown in supplementary Fig. 21.
+45
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+(a) random
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (b) inﬂuence max
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (c) inﬂuence sum-abs
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+(d) self-supervised prototypes
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (e) supervised prototypes
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (f) EL2N (1 model)
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+(g) DDD
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (h) EL2N (20 models)
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (i) memorization
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+(j) active learning
+0.0 0.2 0.4 0.6 0.8 1.0
+Pruning fraction
+0
+20
+40
+60
+80
+100Class balance (%)
+ (k) forgetting
+Figure 20: Pruning ampliﬁes class imbalance. With larger pruning fractions, class balance decreases—
+both when pruning “easy” images (turquoise) and when pruning “hard” images (orange). This effect
+occurs for all pruning metrics except for random pruning (top left). For details on the class imbalance
+metric see Appendix H. Pruning fraction refers to the fraction of data pruned, from 0 (no pruning) to
+0.9 (keeping only 10% of the data).
+46
+Figure 21: ImageNet-1K pruning results for different metrics, compared against random pruning.
+‘Pruning fraction’ refers to the fraction of the dataset that is pruned away. Results obtained without
+any class balancing are worse than results with 50% class balancing (Fig. 5BC), conﬁrming the
+ﬁnding that vanilla pruning ampliﬁes class imbalance.
+47
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+random
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+influence max
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+influence sum-abs
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.1
+0.2
+0.3
+0.4
+0.5
+self-supervised prototypes
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+supervised prototypes
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+EL2N (1 model)
+Figure 22: How do ImageNet metric scores differ across classes? Class-conditional score distribution
+histograms across metrics. For the purpose of visualization, only every 10th class is shown.
+48
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0
+2
+4
+6
+8
+10
+DDD
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+EL2N (20 models)
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+memorization
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+active learning
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+180
+190
+200
+210
+220
+230
+240
+250
+260
+270
+280
+290
+300
+310
+320
+330
+340
+350
+360
+370
+380
+390
+400
+410
+420
+430
+440
+450
+460
+470
+480
+490
+500
+510
+520
+530
+540
+550
+560
+570
+580
+590
+600
+610
+620
+630
+640
+650
+660
+670
+680
+690
+700
+710
+720
+730
+740
+750
+760
+770
+780
+790
+800
+810
+820
+830
+840
+850
+860
+870
+880
+890
+900
+910
+920
+930
+940
+950
+960
+970
+980
+990
+Class rank
+0
+5
+10
+15
+20
+25
+30
+forgetting
+Figure 23: How do ImageNet metric scores differ across classes (continued)? Class-conditional score
+distribution histograms across metrics. For the purpose of visualization, only every 10th class is
+shown. Please note that the active learning plot is to be taken with a grain of salt since the authors
+provided a binary score (included/excluded) for ImageNet corresponding to 80% “important” images,
+thus the scores are either zero or one and a boxplot ﬁt does not apply here.
+49
+I Effect of pruning on class-conditional accuracy and fairness
+In order to study the effect of dataset pruning on model fairness, at least with respect to speciﬁc
+ImageNet classes, we compared the class-conditional accuracy of a ResNet-50 model trained on the
+full ImageNet dataset, versus that of the same model trained on an 80% subset obtained after pruning.
+We used two supervised pruning metrics (EL2N, memorization) and one self-supervised pruning
+metric (self-supervised prototypes) for obtaining the pruned dataset. In all three cases, and across all
+1000 classes, we found that the class-conditional accuracy of the model trained on a pruned subset of
+the dataset remains quite similar to that of the model trained on the full dataset (Fig. 24). However,
+we did notice a very small reduction in class-conditioned accuracy for ImageNet classes that were
+least accurately predicted by models trained on the entire dataset (blue lines slightly above red unity
+lines when class-conditioned accuracy is low). This suggests that pruning yields a slight systematic
+reduction in the accuracy of harder classes, relative to easier classes, though the effect is small.
+While we have focused on fairness with respect to individual ImageNet classes, any ultimate test
+of model fairness should be conducted in scenarios that are speciﬁc to the use case of the deployed
+model. Our examination of the fairness of pruning with respect to individual ImageNet classes
+constitutes only an initial foray into an exploration of fairness, given the absence of any speciﬁc
+deployment scenario for our current models other than testing them on ImageNet. We leave a full
+exploration of fairness in other deployment settings for future work.
+20 40 60 80 100
+Class-wise accuracy on pruned ImageNet-1K dataset (80% samples kept)
+20
+40
+60
+80
+100Class-wise accuracy on full ImageNet-1K dataset
+Linear fit
+Unity (y=x) 
+(a) EL2N (20 models)
+20 40 60 80 100
+Class-wise accuracy on pruned ImageNet-1K dataset (80% samples kept)
+20
+40
+60
+80
+100Class-wise accuracy on full ImageNet-1K dataset
+Linear fit
+Unity (y=x) (b) Memorization
+20 40 60 80 100
+Class-wise accuracy on pruned ImageNet-1K dataset (80% samples kept)
+20
+40
+60
+80
+100Class-wise accuracy on full ImageNet-1K dataset
+Linear fit
+Unity (y=x) (c) Self-supervised prototypes
+Figure 24: The effect of data pruning on ImageNet test accuracy on individual classes. For all 3 plots,
+each point corresponds to an ImageNet class, and for all classes, the class speciﬁc test accuracy when
+training on the entire dataset (y-axis) is plotted against the test accuracy when training on the pruned
+dataset (x-axis).
+J Interaction between data pruning and training duration
+Throughout the main paper, our ImageNet experiments are based on a setting where the number
+of training epochs is kept constant (i.e. we train the same number of epochs on the smaller pruned
+dataset as on the larger original dataset). This means that data pruning directly reduces the number of
+iterations required to train the model speciﬁcally by reducing the size of the dataset. However, this
+simultaneously places two constraints on model performance: not only training on a smaller data set,
+but also training for fewer iterations.
+We therefore investigate how model performance changes if we train longer, as quantiﬁed by a
+matched iterations factor. A matched iterations factor of 0 corresponds to the default setting used in
+the paper of training for the same number of epochs (so that a smaller dataset means proportionally
+fewer training iterations). In contrast a matched iterations factor of 1 corresponds to training on the
+smaller pruned dataset for a number of iterations equal to that when training on the larger initial
+dataset (e.g. when pruning away 50% of the dataset one would train twice as long to match the
+number of iterations of a model trained on 100% of the dataset). Otherwise the matched iterations
+factor reﬂects a linear interpolation in the number of training iterations as the factor varies between 0
+and 1.
+50
+The results are shown in Table 4 and indicate that training longer does indeed improve performance
+slightly; however, a matched iterations factor of around 0.4–0.6 may already be sufﬁcient to reap the
+full beneﬁt. Any matched iterations factor strictly smaller than 1.0 comes with reduced training time
+compared to training a model on the full dataset.
+matched iterations factor 0.0 0.2 0.4 0.6 0.8 1.0
+ImageNet top-5 accuracy 90.20 90.41 90.48 90.56 90.45 90.50
+Table 4: Comparing different settings for training longer when pruning: Performance (top-5 acuracy)
+when pruning away 20% of ImageNet based on our self-supervised prototype metric. Supervised
+model training on the pruned dataset performed with a ResNet-50 architecture trained using VISSL
+without class balancing. Performance tends to increase when training longer (i.e. with a larger
+matched iterations factor). Interestingly, the beneﬁt of training longer may already be achieved with a
+matched iterations factor of around 0.4–0.6.
+K Out-of-distribution (OOD) analysis of dataset pruning
+Pruning changes the data regime that a model is exposed to. Therefore, a natural question is how
+this might affect desirable properties beyond IID performance like fairness (see Appendix I) and
+out-of-distribution, or OOD, performance which we investigate here. To this end, we use the model-vs-
+human toolbox [47] based on data and analyses from [48, 49, 50, 51, 52]. This toolbox is comprised
+of 17 different OOD datasets, including many image distortions and style changes.
+In Figure 25a, OOD accuracies averaged across those 17 datasets are shown for a total of 12 models.
+These models all have a ResNet-50 architecture [53]. Two baseline models are trained on the full
+ImageNet training dataset, one using torchvision (purple) and the other using VISSL (blue). Human
+classiﬁcation data is shown as an additional reference in red. The remaining 10 models are VISSL-
+trained on pruned versions of ImageNet using pruning fractions in {0.1, 0.2, 0.3, 0.4, 0.5} and our
+self-supervised prototype metric. A pruning fraction of 0.3 would correspond to “fraction of data
+kept = 0.7”, i.e. to training on 70% of ImageNet while discarding the other 30%. We investigated two
+different settings: discarding easy examples (the default used throughout the paper), which is denoted
+as “Best Case” (or BC) in the plots; and the reverse setting, i.e. discarding hard examples denoted
+as Worst Case, or WC. (These terms should be taken with a grain of salt; examples are only insofar
+best- or worst case examples as predicted by the metric, which itself is in all likelihood far less than
+perfect.)
+The results are as follows: In terms of OOD accuracy (Figure 25a), best-case pruning in green
+achieves very similar accuracies to the most relevant baseline, the blue ResNet-50 model trained
+via VISSL. This is interesting since oftentimes, OOD accuracies closely follow IID accuracies
+except for a constant offset [ 54], and we know from Figure 5 that the self-supervised prototype
+metric has a drastic performance impairment when pruning away 40% of the data, yet the model
+“BC_pruning-fraction-0.4” still achieves almost the same OOD accuracy as the baseline trained on
+the full dataset. The core take-away is: While more analyses would be necessary to investigate
+whether pruning indeed consistently helps on OOD performance, it seems safe to conclude
+that it does not hurt OOD performance on the investigated datasets compared to an accuracy-
+matched baseline. (The control setting, pruning away hard examples shown in orange, leads to much
+lower IID accuracies and consequently also lower OOD accuracies.) For reference, the numerical
+results from Figure 25a are also shown in Table 5.
+Figures 25b, 25c and 25d focus on a related question, the question of whether models show human-
+like behavior on OOD datasets. Figure 25b shows that two models pruned using our self-supervised
+prototype metric somewhat more closely match human accuracies compared to the baseline in blue;
+Figures 25c and 25d speciﬁcally focus on image-level consistency with human responses. In terms
+of overall consistency (c), the baseline scores best; in terms of error consistency pruned models
+outperform the VISSL-trained baseline. For details on the metrics we kindly refer the interested
+reader to [47]. Numerical results are again also shown in a Table (Table 6).
+Finally, in Figure 26 we observe that best-case pruning leads to slightly higher shape bias as indicated
+by green vertical lines plotting the average shape bias across categories, which are shifted to the left
+51
+of the baseline; while worst-case pruning in orange is shifted to the right. An outlier is the torchvision-
+trained model in purple with a very strong texture bias; we attribute this to data augmentation
+differences between VISSL and torchvision training.
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8OOD accuracy
+WC_pruning-fraction-0.5
+WC_pruning-fraction-0.4
+WC_pruning-fraction-0.3
+WC_pruning-fraction-0.2
+ResNet-50 (torchvision)
+BC_pruning-fraction-0.5
+WC_pruning-fraction-0.1
+BC_pruning-fraction-0.2
+BC_pruning-fraction-0.1
+BC_pruning-fraction-0.4
+BC_pruning-fraction-0.3
+ResNet-50 (VISSL)
+humans
+(a) OOD accuracy (higher = better).
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+0.14accuracy difference
+WC_pruning-fraction-0.5
+WC_pruning-fraction-0.4
+WC_pruning-fraction-0.3
+ResNet-50 (torchvision)
+WC_pruning-fraction-0.2
+BC_pruning-fraction-0.2
+WC_pruning-fraction-0.1
+BC_pruning-fraction-0.1
+BC_pruning-fraction-0.4
+ResNet-50 (VISSL)
+BC_pruning-fraction-0.5
+BC_pruning-fraction-0.3
+humans (b) Accuracy difference (lower = better).
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9observed consistency
+WC_pruning-fraction-0.5
+WC_pruning-fraction-0.4
+WC_pruning-fraction-0.3
+WC_pruning-fraction-0.2
+BC_pruning-fraction-0.2
+ResNet-50 (torchvision)
+BC_pruning-fraction-0.5
+WC_pruning-fraction-0.1
+BC_pruning-fraction-0.4
+BC_pruning-fraction-0.1
+BC_pruning-fraction-0.3
+ResNet-50 (VISSL)
+humans
+(c) Observed consistency (higher = better).
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5error consistency
+WC_pruning-fraction-0.5
+WC_pruning-fraction-0.4
+BC_pruning-fraction-0.2
+BC_pruning-fraction-0.1
+WC_pruning-fraction-0.3
+ResNet-50 (VISSL)
+WC_pruning-fraction-0.2
+BC_pruning-fraction-0.4
+BC_pruning-fraction-0.5
+WC_pruning-fraction-0.1
+BC_pruning-fraction-0.3
+ResNet-50 (torchvision)
+humans (d) Error consistency (higher = better).
+Figure 25: OOD benchmark results for different models, aggregated over 17 datasets. All models
+have a ResNet-50 architecture [53]. Two baseline models are trained on the full ImageNet training
+dataset, one using torchvision (purple) and the other using VISSL (blue). Human comparison data is
+shown in red.
+Table 5: Benchmark table of model results for highest out-of-distribution robustness.
+model OOD accuracy ↑ rank↓
+ResNet-50 (VISSL) 0.582 1.000
+BC_pruning-fraction-0.3 0.578 2.000
+BC_pruning-fraction-0.4 0.574 3.000
+BC_pruning-fraction-0.1 0.574 4.000
+BC_pruning-fraction-0.2 0.565 5.000
+WC_pruning-fraction-0.1 0.565 6.000
+BC_pruning-fraction-0.5 0.560 7.000
+ResNet-50 (torchvision) 0.559 8.000
+WC_pruning-fraction-0.2 0.556 9.000
+WC_pruning-fraction-0.3 0.540 10.000
+WC_pruning-fraction-0.4 0.516 11.000
+WC_pruning-fraction-0.5 0.498 12.000
+52
+Table 6: Benchmark table of model results for most human-like behaviour. The three metrics
+“accuracy difference” “observed consistency” and “error consistency” (plotted in Figure 25) each
+produce a different model ranking.
+model accuracy diff. ↓ obs. consistency↑ error consistency↑ mean rank↓
+BC_pruning-fraction-0.3 0.075 0.671 0.194 1.667
+ResNet-50 (VISSL) 0.077 0.671 0.184 3.667
+BC_pruning-fraction-0.5 0.077 0.666 0.190 4.000
+BC_pruning-fraction-0.4 0.078 0.670 0.187 4.333
+WC_pruning-fraction-0.1 0.082 0.666 0.191 4.667
+ResNet-50 (torchvision) 0.087 0.665 0.208 5.667
+BC_pruning-fraction-0.1 0.079 0.671 0.182 5.667
+WC_pruning-fraction-0.2 0.086 0.658 0.186 7.667
+BC_pruning-fraction-0.2 0.084 0.660 0.175 8.333
+WC_pruning-fraction-0.3 0.088 0.652 0.183 9.333
+WC_pruning-fraction-0.4 0.099 0.635 0.169 11.000
+WC_pruning-fraction-0.5 0.108 0.623 0.165 12.000
+00.10.20.30.40.50.60.70.80.91
+Fraction of 'shape' decisions
+0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1
+Fraction of 'texture' decisions
+Shape categories
+Figure 26: Shape vs. texture bias [ 50]: category-level plot. Horizontal lines indicate average
+shape/texture bias; values to the left lean towards a shape bias while values to the right lean towards a
+texture bias. For details on the plot see [50]; model colors are identical to Figure 25.
+53
