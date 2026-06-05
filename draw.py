@@ -170,9 +170,9 @@ def draw_svg(series_list: list[Series], output_path: Path, title: str) -> None:
         f'<text x="26" y="{top + plot_h/2:.2f}" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#111827" transform="rotate(-90 26 {top + plot_h/2:.2f})">MSE</text>'
     )
 
-    legend_item_width = 245
-    legend_rows = (len(series_list) + 1) // 2
-    legend_w = min(plot_w, legend_item_width * 2)
+    legend_item_width = 320
+    legend_rows = len(series_list)
+    legend_w = min(plot_w, legend_item_width)
     legend_h = 28 + legend_rows * 24
     legend_x = width - right - legend_w + 14
     legend_y = top + 32
@@ -195,15 +195,15 @@ def draw_svg(series_list: list[Series], output_path: Path, title: str) -> None:
         best_y = sy(series.best_val_mse)
         svg.append(f'<circle cx="{best_x:.2f}" cy="{best_y:.2f}" r="4.5" fill="{color}"/>')
 
-        lx = legend_x + (index % 2) * legend_item_width
-        ly = legend_y + (index // 2) * 24
+        lx = legend_x
+        ly = legend_y + index * 24
         svg.append(
             f'<line x1="{lx}" y1="{ly}" x2="{lx+34}" y2="{ly}" stroke="{color}" stroke-width="3"/>'
         )
         svg.append(
             f'<line x1="{lx}" y1="{ly+8}" x2="{lx+34}" y2="{ly+8}" stroke="{color}" stroke-width="2.2" stroke-dasharray="7 5"/>'
         )
-        text = f"{series.label} val, train dashed"
+        text = f"{series.label} (solid=val, dashed=train)"
         svg.append(
             f'<text x="{lx+44}" y="{ly+5}" font-family="Arial, sans-serif" font-size="13" fill="#111827">{escape_xml(text)}</text>'
         )
