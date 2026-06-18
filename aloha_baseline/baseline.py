@@ -17,6 +17,11 @@ DEFAULT_INSTRUCTION = "Transfer the cube to the target position."
 
 @dataclass(frozen=True)
 class BaselineConfig:
+    """Baseline 实验的全部可配置参数。
+
+    这些字段会同时写入 baseline_results.json，便于报告中复现实验设置。
+    """
+
     dataset_dir: Path
     output_dir: Path
     camera_key: str = "observation.images.top"
@@ -40,7 +45,11 @@ class BaselineConfig:
 def select_episode_subset(
     episodes: Iterable[int], fraction: float = 0.10, seed: int = 42
 ) -> list[int]:
-    """Randomly sample a fraction of episodes, keeping at least one episode."""
+    """按 episode 随机抽取指定比例轨迹，并保证至少抽到 1 条轨迹。
+
+    这里不是从全部帧中随机抽样，而是先随机选择 episode，再保留这些
+    episode 内的完整帧序列。这样可以保持轨迹内部的时序连续性。
+    """
     unique_episodes = sorted({int(ep) for ep in episodes})
     if not unique_episodes:
         raise ValueError("No episodes found to sample.")
@@ -53,7 +62,7 @@ def select_episode_subset(
 
 
 def select_action_arm(actions: np.ndarray, arm: str = "right") -> np.ndarray:
-    """Select a single 7-DoF arm action from ALOHA's 14-DoF bimanual action."""
+    """从 ALOHA 双臂 14 维动作中取出单臂 7 自由度动作。"""
     actions = np.asarray(actions, dtype=np.float32)
     if actions.ndim != 2 or actions.shape[1] != 14:
         raise ValueError(f"Expected action shape [N, 14], got {actions.shape}.")
@@ -65,11 +74,11 @@ def select_action_arm(actions: np.ndarray, arm: str = "right") -> np.ndarray:
 
 
 def build_language_features(text: str, rows: int, dim: int = 128) -> np.ndarray:
-    """Create a deterministic lightweight instruction embedding.
+    """构造轻量级、确定性的语言指令特征。
 
-    This baseline keeps the vision encoder pretrained/frozen and uses a simple
-    hashed bag-of-words vector for the single task instruction. It avoids adding
-    a heavy language model while still constructing [vision + language] inputs.
+    为了保持 baseline 足够轻量，这里不用额外语言模型，而是使用哈希词袋
+    生成固定维度向量。由于本数据集通常只有一个任务指令，该向量会在所有
+    帧上重复，用于构造 [视觉特征 + 语言指令] 输入。
     """
     if rows < 0:
         raise ValueError("rows must be non-negative.")
@@ -89,7 +98,7 @@ def build_language_features(text: str, rows: int, dim: int = 128) -> np.ndarray:
 
 
 def assert_pyav_available() -> None:
-    """Fail early with a clear message when torchvision video decoding cannot run."""
+    """提前检查 PyAV，避免视频解码时出现难读的底层报错。"""
     try:
         importlib.import_module("av")
     except ImportError as exc:
@@ -100,11 +109,13 @@ def assert_pyav_available() -> None:
 
 
 def _tokenize(text: str) -> list[str]:
+    """将英文指令切成简单 token，供哈希词袋编码使用。"""
     normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in text)
     return [part for part in normalized.split() if part]
 
 
 def _stable_hash(text: str) -> int:
+    """稳定哈希函数，保证不同运行之间语言特征完全可复现。"""
     value = 2166136261
     for byte in text.encode("utf-8"):
         value ^= byte
@@ -113,6 +124,11 @@ def _stable_hash(text: str) -> int:
 
 
 def run_baseline(config: BaselineConfig) -> dict:
+    """执行随机抽样 baseline 的完整流程。
+
+    流程包括：读取数据、随机抽取 episode、离线提取冻结 ResNet-18 视觉特征、
+    拼接语言特征、训练 MLP，并保存 MSE 和模型权重。
+    """
     import pandas as pd
     import pyarrow.parquet as pq
     import torch
@@ -126,14 +142,18 @@ def run_baseline(config: BaselineConfig) -> dict:
     device = resolve_device(config.device)
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # 读取 LeRobot/HuggingFace 风格的数据集元信息与 parquet 表格。
     info = load_dataset_info(config.dataset_dir)
     metadata = load_metadata(config.dataset_dir)
+
+    # 按轨迹随机抽样；当前 50 条轨迹、10% 设置下会抽取 5 条完整轨迹。
     sampled_episodes = select_episode_subset(
         metadata["episode_index"].unique(), config.sample_fraction, config.seed
     )
     rows = metadata[metadata["episode_index"].isin(sampled_episodes)].copy()
     rows = rows.sort_values("index").reset_index(drop=True)
 
+    # 数据集动作是双臂 14 维，题目要求单臂 7 自由度动作，因此取左臂或右臂。
     actions = np.stack(rows["action"].to_numpy()).astype(np.float32)
     targets = select_action_arm(actions, config.arm)
 
@@ -142,8 +162,10 @@ def run_baseline(config: BaselineConfig) -> dict:
     meta_path = config.output_dir / "sampled_rows.csv"
 
     if feature_path.exists() and target_path.exists():
+        # 若已经离线提取过特征，直接复用，避免重复解码视频。
         vision_features = np.load(feature_path)
     else:
+        # 冻结 ResNet-18，只将其作为视觉特征提取器，不参与 MLP 训练。
         encoder, transform = build_frozen_resnet18(config.pretrained, device)
         vision_features = extract_video_features(
             dataset_dir=config.dataset_dir,
@@ -161,6 +183,7 @@ def run_baseline(config: BaselineConfig) -> dict:
         np.save(target_path, targets)
         rows.to_csv(meta_path, index=False)
 
+    # 对每一帧拼接同一个语言指令向量，形成 [视觉特征 + 语言指令]。
     language_features = build_language_features(
         config.instruction, rows=len(rows), dim=config.language_dim
     )
@@ -168,6 +191,7 @@ def run_baseline(config: BaselineConfig) -> dict:
         np.float32
     )
 
+    # 在抽中的轨迹样本内部划分训练/验证集，并报告验证集 MSE。
     train_idx, val_idx = make_train_val_split(
         rows["episode_index"].to_numpy(), config.val_fraction, config.seed
     )
@@ -207,11 +231,13 @@ def run_baseline(config: BaselineConfig) -> dict:
 
 
 def load_dataset_info(dataset_dir: Path) -> dict:
+    """读取数据集 meta/info.json。"""
     with (dataset_dir / "meta" / "info.json").open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def load_metadata(dataset_dir: Path):
+    """读取 data/chunk-* 下所有 parquet，并合并为一个 DataFrame。"""
     import pandas as pd
     import pyarrow.parquet as pq
 
@@ -227,6 +253,10 @@ def load_metadata(dataset_dir: Path):
 
 
 def build_frozen_resnet18(pretrained: bool, device):
+    """构建冻结的 ResNet-18 特征提取器。
+
+    将最后分类层替换为 Identity 后，输出 512 维视觉特征。
+    """
     import torch
     from torch import nn
     from torchvision.models import ResNet18_Weights, resnet18
@@ -254,6 +284,7 @@ def extract_video_features(
     num_workers: int,
     progress,
 ) -> np.ndarray:
+    """根据 parquet 中的帧索引，从视频中提取对应图像的 ResNet-18 特征。"""
     import torch
 
     assert_pyav_available()
@@ -279,9 +310,11 @@ def extract_video_features_streaming(
     batch_size: int,
     progress,
 ) -> np.ndarray:
+    """优先使用 VideoReader 流式扫描视频，减少一次性读入整段视频的内存开销。"""
     import torch
     from torchvision.io import VideoReader
 
+    # frame_indices 可能不是连续的；建立“视频帧号 -> 输出位置”的映射。
     target_positions: dict[int, list[int]] = {}
     for output_pos, frame_index in enumerate(frame_indices.tolist()):
         target_positions.setdefault(int(frame_index), []).append(output_pos)
@@ -339,6 +372,7 @@ def extract_video_features_in_memory(
     batch_size: int,
     progress,
 ) -> np.ndarray:
+    """VideoReader 不可用时的备用方案：一次性读取视频后按索引取帧。"""
     import torch
 
     video, _, _ = read_video_compat(video_path)
@@ -358,6 +392,7 @@ def extract_video_features_in_memory(
 
 
 def encode_frame_batch(frames, encoder, transform, device, torch) -> np.ndarray:
+    """将一批视频帧转换为 ResNet 输入格式，并返回冻结编码器特征。"""
     if isinstance(frames, list):
         batch = torch.stack(frames, dim=0)
     else:
@@ -373,6 +408,7 @@ def encode_frame_batch(frames, encoder, transform, device, torch) -> np.ndarray:
 
 
 def resolve_video_path(dataset_dir: Path, info: dict, camera_key: str) -> Path:
+    """根据 info.json 中的视频路径模板定位指定相机视角的视频文件。"""
     pattern = info.get("video_path", "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4")
     relative = pattern.format(video_key=camera_key, chunk_index=0, file_index=0)
     path = dataset_dir / relative
@@ -385,6 +421,7 @@ def resolve_video_path(dataset_dir: Path, info: dict, camera_key: str) -> Path:
 
 
 def read_video_compat(video_path: Path):
+    """torchvision.read_video 的兼容包装。"""
     from torchvision.io import read_video
 
     return read_video(str(video_path), pts_unit="sec", output_format="THWC")
@@ -393,6 +430,10 @@ def read_video_compat(video_path: Path):
 def make_train_val_split(
     episode_indices: np.ndarray, val_fraction: float, seed: int
 ) -> tuple[np.ndarray, np.ndarray]:
+    """按 episode 划分训练/验证集，避免同一轨迹同时进入训练和验证。
+
+    若样本太少导致无法按 episode 划分，则退回到按帧随机划分。
+    """
     sampled_episodes = np.unique(episode_indices.astype(np.int64))
     val_episodes = select_episode_subset(sampled_episodes, val_fraction, seed + 1009)
     val_mask = np.isin(episode_indices, val_episodes)
@@ -424,11 +465,13 @@ def train_mlp(
     DataLoader,
     TensorDataset,
 ):
+    """训练轻量级 MLP 动作回归器，并记录每个 epoch 的训练/验证 MSE。"""
     x_train = torch.from_numpy(features[train_idx]).float()
     y_train = torch.from_numpy(targets[train_idx]).float()
     x_val = torch.from_numpy(features[val_idx]).float().to(device)
     y_val = torch.from_numpy(targets[val_idx]).float().to(device)
 
+    # 两层隐藏层的轻量 MLP；输入是 [视觉特征 + 语言指令]，输出是 7 维动作。
     model = nn.Sequential(
         nn.Linear(features.shape[1], hidden_dim),
         nn.ReLU(),
@@ -451,6 +494,7 @@ def train_mlp(
     best_val_mse = float("inf")
 
     for epoch in range(1, epochs + 1):
+        # 训练阶段：只更新 MLP 参数，视觉编码器已在特征提取阶段冻结。
         model.train()
         running_loss = 0.0
         seen = 0
@@ -465,6 +509,7 @@ def train_mlp(
             running_loss += loss.item() * len(batch_x)
             seen += len(batch_x)
 
+        # 验证阶段：在固定验证集上报告动作预测 MSE。
         model.eval()
         with torch.inference_mode():
             val_prediction = model(x_val)
@@ -486,6 +531,7 @@ def train_mlp(
 
 
 def set_seed(seed: int) -> None:
+    """固定 Python、NumPy、PyTorch 随机种子，提升实验可复现性。"""
     random.seed(seed)
     np.random.seed(seed)
     try:
@@ -499,6 +545,7 @@ def set_seed(seed: int) -> None:
 
 
 def resolve_device(name: str):
+    """解析训练设备；auto 时优先使用 CUDA，否则使用 CPU。"""
     import torch
 
     if name == "auto":
@@ -507,6 +554,7 @@ def resolve_device(name: str):
 
 
 def parse_args() -> BaselineConfig:
+    """解析命令行参数并生成 BaselineConfig。"""
     parser = argparse.ArgumentParser(
         description="Random 10% ALOHA baseline: frozen ResNet-18 features + instruction vector -> 7-DoF action MLP."
     )
@@ -550,6 +598,7 @@ def parse_args() -> BaselineConfig:
 
 
 def main() -> None:
+    """命令行入口。"""
     result = run_baseline(parse_args())
     print(json.dumps(result["metrics"], ensure_ascii=False, indent=2))
 
