@@ -1,6 +1,5 @@
 # 题目二：ALOHA Sim Transfer Cube 基准测试
-
-本目录实现了题目二第一步 Baseline：在 ALOHA Sim Transfer Cube Human Demonstrations 数据集上随机抽取 10% 轨迹，使用冻结的 ResNet-18 离线提取图像特征，将 `[视觉特征 + 语言指令]` 回归到单臂 `7` 自由度动作，并报告动作预测 MSE。
+Baseline：在 ALOHA Sim Transfer Cube Human Demonstrations 数据集上随机抽取 10% 轨迹，使用冻结的 ResNet-18 离线提取图像特征，将 `[视觉特征 + 语言指令]` 回归到单臂 `7` 自由度动作，并报告动作预测 MSE。
 
 ## Conda 环境
 
